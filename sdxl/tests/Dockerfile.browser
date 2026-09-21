@@ -1,0 +1,5 @@
+FROM mcr.microsoft.com/playwright:v1.55.0-noble@sha256:b27e719ecbfef153e13fd24e8341736733bf2658b229677eb21ff57ff5d7fb29
+WORKDIR /test
+RUN npm install --no-audit --no-fund --save-exact playwright@1.55.0
+COPY browser.cjs ./
+CMD ["node", "browser.cjs"]

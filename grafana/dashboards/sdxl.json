@@ -1,0 +1,22 @@
+{
+  "uid": "local-sdxl",
+  "title": "Local SDXL",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "refresh": "5s",
+  "time": {"from": "now-1h", "to": "now"},
+  "tags": ["sdxl", "gpu"],
+  "panels": [
+    {"id": 1, "title": "Ready", "type": "stat", "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"refId": "A", "expr": "sdxl_ready"}]},
+    {"id": 2, "title": "Queued / active", "type": "stat", "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"refId": "A", "expr": "sdxl_queue_depth", "legendFormat": "Queued"}, {"refId": "B", "expr": "sdxl_active", "legendFormat": "Active"}]},
+    {"id": 3, "title": "Images", "type": "stat", "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"refId": "A", "expr": "increase(sdxl_images_total[$__range])"}]},
+    {"id": 4, "title": "Errors / OOM", "type": "stat", "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"refId": "A", "expr": "increase(sdxl_errors_total[$__range])", "legendFormat": "Errors"}, {"refId": "B", "expr": "increase(sdxl_oom_total[$__range])", "legendFormat": "OOM"}]},
+    {"id": 5, "title": "Seconds per image (mean)", "type": "timeseries", "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}, "targets": [{"refId": "A", "expr": "rate(sdxl_generation_seconds_sum[$__rate_interval]) / rate(sdxl_generation_seconds_count[$__rate_interval])"}]},
+    {"id": 6, "title": "Last generation CUDA peak", "type": "timeseries", "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []}, "targets": [{"refId": "A", "expr": "sdxl_cuda_peak_bytes", "legendFormat": "CUDA {{gpu}} {{kind}}"}]},
+    {"id": 7, "title": "GPU free VRAM (whole machine)", "type": "timeseries", "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []}, "targets": [{"refId": "A", "expr": "nvidia_smi_memory_free_bytes{job=\"gpu\"}", "legendFormat": "{{uuid}}"}]},
+    {"id": 8, "title": "GPU utilization (whole machine)", "type": "timeseries", "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []}, "targets": [{"refId": "A", "expr": "nvidia_smi_utilization_gpu_ratio{job=\"gpu\"}", "legendFormat": "{{uuid}}"}]}
+  ],
+  "links": [{"title": "Model logs", "type": "link", "url": "/d/local-llm-logs", "keepTime": true}, {"title": "LLM and GPU", "type": "link", "url": "/d/local-qwen", "keepTime": true}]
+}

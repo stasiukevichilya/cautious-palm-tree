@@ -2,7 +2,7 @@ groups:
   - name: local-inference
     rules:
       - alert: ScrapeTargetDown
-        expr: up{job!~"llama|qwen|gemma"} == 0
+        expr: up{job!~"llama|qwen|gemma|sdxl"} == 0
         for: 3m
         labels:
           severity: warning
@@ -15,3 +15,17 @@ groups:
           severity: warning
         annotations:
           summary: Llama requests have been queued for over 10 minutes
+      - alert: SdxlNotReady
+        expr: (sdxl_ready == 0) and on(job, instance) (up{job="sdxl"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: SDXL is running but not ready
+      - alert: SdxlQueueWaiting
+        expr: sdxl_queue_depth > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: SDXL jobs have been queued for over 10 minutes

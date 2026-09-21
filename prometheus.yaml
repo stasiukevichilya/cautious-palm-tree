@@ -4,6 +4,10 @@ global:
 rule_files:
   - /etc/prometheus/alerts.yaml
 scrape_configs:
+  - job_name: sdxl
+    static_configs:
+      - targets: ['sdxl:8080']
+
   - job_name: qwen
     static_configs:
       - targets: ['qwen:8080']

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SDXL Studio</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header><a class="brand" href="/">SDXL <span>Studio</span></a><span id="connection" role="status">Подключение</span></header>
+  <main>
+    <section class="controls" aria-label="Параметры генерации">
+      <h1>Новое изображение</h1>
+      <form id="generate-form">
+        <label for="prompt">Промпт</label>
+        <textarea id="prompt" name="prompt" rows="6" maxlength="2000" required placeholder="A glass pavilion beside a lake, morning light, architectural photography"></textarea>
+        <label for="negative_prompt">Негативный промпт</label>
+        <textarea id="negative_prompt" name="negative_prompt" rows="3" maxlength="2000" placeholder="blur, low quality"></textarea>
+        <label for="size">Размер</label>
+        <select id="size"><option>1024 × 1024</option></select>
+        <div class="pair">
+          <div><label for="steps">Шаги</label><input id="steps" name="steps" type="number" min="1" max="60" value="30" required></div>
+          <div><label for="guidance_scale">Guidance</label><input id="guidance_scale" name="guidance_scale" type="number" min="1" max="15" step="0.5" value="5" required></div>
+        </div>
+        <label for="seed">Seed</label>
+        <input id="seed" name="seed" type="number" min="0" max="4294967295" step="1" placeholder="Случайный">
+        <button class="primary" type="submit" id="generate" disabled>Создать изображение</button>
+      </form>
+      <p id="error" role="alert" hidden></p>
+      <dl class="model-info"><dt>Модель</dt><dd>SDXL Base 1.0</dd><dt>Режим</dt><dd id="mode">—</dd></dl>
+    </section>
+    <section class="result" aria-label="Результат">
+      <div class="result-heading"><h2 id="result-title">Результат</h2><button type="button" id="cancel" hidden>Отменить</button><a id="download" class="download" hidden>Скачать PNG</a></div>
+      <div class="canvas"><img id="image" alt="Сгенерированное изображение" hidden><div id="empty"><span class="frame-mark">SDXL</span><p id="status" role="status">Нет изображения</p></div></div>
+      <progress id="progress" max="30" value="0" hidden aria-label="Шаги генерации"></progress>
+      <div id="details" class="details"></div>
+    </section>
+    <section class="history"><div class="history-heading"><h2>История</h2><span id="history-count">0</span></div><div id="history-list"></div></section>
+  </main>
+</body>
+</html>

@@ -7,6 +7,47 @@ x-common: &common
       max-size: 10m
       max-file: '3'
 services:
+  sdxl:
+    <<: *common
+    profiles: ["sdxl"]
+    build:
+      context: ./sdxl
+      args:
+        SDXL_BASE_IMAGE: ${SDXL_BASE_IMAGE:-pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime@sha256:c16f4c749e2d9e96878875cdf6cc45cddda1d1a36fddd371dd6f2360f1b6e2a2}
+    image: local/ml-sdxl:1
+    init: true
+    user: "${SDXL_UID:-1000}:${SDXL_GID:-1000}"
+    stop_grace_period: 75s
+    environment:
+      SDXL_MODE: single
+      CUDA_VISIBLE_DEVICES: ${SDXL_GPU0:-0}
+      NVIDIA_VISIBLE_DEVICES: ${SDXL_GPU0:-0}
+      SDXL_QUEUE_SIZE: ${SDXL_QUEUE_SIZE:-4}
+      SDXL_MAX_RESULTS: ${SDXL_MAX_RESULTS:-100}
+      SDXL_RETENTION_HOURS: ${SDXL_RETENTION_HOURS:-168}
+      SDXL_VAE_TILING: ${SDXL_VAE_TILING:-1}
+      SDXL_VRAM_RESERVE_GIB: ${SDXL_VRAM_RESERVE_GIB:-1.5}
+      SDXL_GPU0_BUDGET: ${SDXL_GPU0_BUDGET:-11GiB}
+      SDXL_GPU1_BUDGET: ${SDXL_GPU1_BUDGET:-9GiB}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${SDXL_GPU0:-0}"]
+              capabilities: [gpu]
+    volumes:
+      - ./models/sdxl-base-1.0:/models:ro
+      - ./outputs/sdxl:/outputs
+    ports:
+      - "127.0.0.1:8082:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      start_period: 180s
+      retries: 4
   gemma:
     <<: *common
     profiles: ["gemma"]
@@ -248,7 +289,7 @@ services:
       - --server.http.listen-addr=0.0.0.0:12345
       - /etc/alloy/config.alloy
     environment:
-      LOG_PROJECT: ${COMPOSE_PROJECT_NAME:-qwen-local}
+      LOG_PROJECT: ${COMPOSE_PROJECT_NAME:-ml-local}
     volumes:
       - ./config.alloy:/etc/alloy/config.alloy:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro

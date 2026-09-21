@@ -13,7 +13,7 @@ discovery.relabel "models" {
   targets = discovery.docker.models.targets
   rule {
     source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
-    regex = "qwen|gemma"
+    regex = "qwen|gemma|sdxl"
     action = "keep"
   }
   rule {

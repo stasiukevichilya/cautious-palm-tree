@@ -1,2 +1,5 @@
 .env
 models/
+outputs/
+__pycache__/
+*.pyc
