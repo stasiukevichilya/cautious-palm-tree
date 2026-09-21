@@ -1,0 +1,269 @@
+name: ml-local
+x-common: &common
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: '3'
+services:
+  gemma:
+    <<: *common
+    profiles: ["gemma"]
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    gpus: all
+    environment:
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-0,1}
+    volumes:
+      - ./models:/models:ro
+    ports:
+      - "127.0.0.1:8081:8080"
+    command:
+      - --model
+      - /models/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf
+      - --alias
+      - gemma4-26b-a4b
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --device
+      - CUDA0,CUDA1
+      - --gpu-layers
+      - all
+      - --override-tensor
+      - 'token_embd\.weight=CUDA0'
+      - --fit
+      - "off"
+      - --split-mode
+      - layer
+      - --tensor-split
+      # - "0.53,0.47"
+      - ${GEMMA_TENSOR_SPLIT:-0.50,0.50}
+      #- --ctx-size
+      #- ${GEMMA_CTX_SIZE:-262144}
+
+      #- --parallel
+      #- "1"
+
+      # - parallel - start
+      - --ctx-size
+      - ${GEMMA_CTX_SIZE:-262144}
+      - --parallel
+      - "2"
+      - --no-kv-unified
+      - --cont-batching
+      # - parallel - end
+      - --flash-attn
+      - "on"
+      - --cache-type-k
+      - q8_0
+      - --cache-type-v
+      - q8_0
+      - --cache-ram
+      - "0"
+      - --ctx-checkpoints
+      - "0"
+      - --batch-size
+      - "512"
+      - --ubatch-size
+      - ${GEMMA_UBATCH_SIZE:-64}
+      - --threads
+      - "4"
+      - --poll
+      - "0"
+      - --jinja
+      - --metrics
+      - --sleep-idle-seconds
+      - "-1"
+
+  qwen:
+    <<: *common
+    profiles: ["qwen"]
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    gpus: all
+    environment:
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-0,1}
+    volumes:
+      - ./models:/models:ro
+    ports:
+      - 127.0.0.1:8080:8080
+    command:
+      - --model
+      - /models/${QWEN_MODEL_FILE:-Qwen3.8-27B-UD-Q4_K_M.gguf}
+      - --alias
+      - qwen3.8-27b
+      - --host
+      - 0.0.0.0
+      - --port
+      - '8080'
+      - --device
+      - CUDA0,CUDA1
+      - --gpu-layers
+      - all
+      - --override-tensor
+      - 'token_embd\.weight=CUDA0'
+      - --fit
+      - 'off'
+      - --split-mode
+      - layer
+      - --tensor-split
+      - ${QWEN_TENSOR_SPLIT:-0.57,0.43}
+      - --ctx-size
+      - ${QWEN_CTX_SIZE:-200192}
+      - --parallel
+      - '1'
+      - --flash-attn
+      - 'on'
+      - --cache-type-k
+      - q8_0
+      - --cache-type-v
+      - q8_0
+      - --cache-ram
+      - '0'
+      - --ctx-checkpoints
+      - '0'
+      - --batch-size
+      - '512'
+      - --ubatch-size
+      - ${QWEN_UBATCH_SIZE:-64}
+      - --threads
+      - '4'
+      - --poll
+      - '0'
+      - --jinja
+      - --metrics
+      - --sleep-idle-seconds
+      - '-1'
+  dsh:
+    <<: *common
+    build:
+      context: ./dsh
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-node:24-bookworm-slim}
+        DSH_VERSION: ${DSH_VERSION:?Run bash prepare.sh first}
+    image: local/ml-dsh:${DSH_VERSION}
+    init: true
+    environment:
+      DSH_HOME: /home/node/.dsh
+      OTEL_SERVICE_NAME: dsh-agent
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel:4318
+    volumes:
+      - dsh-data:/home/node/.dsh
+      - ./workspace:/workspace
+    working_dir: /workspace
+    ports:
+      - 127.0.0.1:3080:3081
+    command: [dsh, web, --no-open, --host, 127.0.0.1, --port, '3080']
+    depends_on: [otel]
+  dsh-forward:
+    <<: *common
+    image: ${SOCAT_IMAGE:-alpine/socat:latest}
+    network_mode: service:dsh
+    command: ['TCP-LISTEN:3081,fork,reuseaddr,bind=0.0.0.0', 'TCP:127.0.0.1:3080']
+    depends_on: [dsh]
+  gpu-exporter:
+    <<: *common
+    image: ${GPU_IMAGE:-utkuozdemir/nvidia_gpu_exporter:latest}
+    gpus: all
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: utility
+    ports:
+      - 127.0.0.1:9835:9835
+  otel:
+    <<: *common
+    image: ${OTEL_IMAGE:-otel/opentelemetry-collector-contrib:latest}
+    command: [--config=/etc/otel.yaml]
+    volumes:
+      - ./otel.yaml:/etc/otel.yaml:ro
+    ports:
+      - 127.0.0.1:8889:8889
+    depends_on: [tempo]
+  prometheus:
+    <<: *common
+    image: ${PROM_IMAGE:-prom/prometheus:latest}
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --storage.tsdb.retention.time=30d
+      - --storage.tsdb.retention.size=5GB
+    volumes:
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - ./alerts.yaml:/etc/prometheus/alerts.yaml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - 127.0.0.1:9090:9090
+  tempo:
+    <<: *common
+    image: ${TEMPO_IMAGE:-grafana/tempo:2.9.0}
+    command: [-config.file=/etc/tempo.yaml]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+  grafana:
+    <<: *common
+    image: ${GRAFANA_IMAGE:-grafana/grafana:latest}
+    environment:
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?Run bash prepare.sh first}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3055:3000"
+#  grafana-forward:
+#    image: ${SOCAT_IMAGE:-alpine/socat:latest}
+#    restart: unless-stopped
+#    depends_on:
+#      - grafana
+#    ports:
+#      - "127.0.0.1:3055:3055"
+#    command:
+#      - "TCP-LISTEN:3055,fork,reuseaddr,bind=0.0.0.0"
+#      - "TCP:grafana:3000"
+  loki:
+    image: ${LOKI_IMAGE:-grafana/loki:3.6.13}
+    restart: unless-stopped
+    command: ['-config.file=/etc/loki/config.yaml']
+    volumes:
+      - ./loki.yaml:/etc/loki/config.yaml:ro
+      - loki-data:/loki
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  alloy:
+    image: ${ALLOY_IMAGE:-grafana/alloy:v1.19.2}
+    restart: unless-stopped
+    user: '0:0'
+    command:
+      - run
+      - --storage.path=/var/lib/alloy/data
+      - --server.http.listen-addr=0.0.0.0:12345
+      - /etc/alloy/config.alloy
+    environment:
+      LOG_PROJECT: ${COMPOSE_PROJECT_NAME:-qwen-local}
+    volumes:
+      - ./config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    depends_on:
+      - loki
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+volumes:
+  dsh-data:
+  prometheus-data:
+  tempo-data:
+  grafana-data:
+  loki-data:
+  alloy-data:

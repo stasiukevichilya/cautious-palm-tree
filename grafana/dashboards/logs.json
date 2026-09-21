@@ -1,0 +1,119 @@
+{
+  "uid": "local-llm-logs",
+  "title": "Local LLM — логи Qwen / Gemma",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "refresh": "10s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "tags": [
+    "llama.cpp",
+    "loki"
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Логи Qwen / Gemma",
+      "type": "logs",
+      "description": "stdout/stderr контейнеров выбранных моделей. Логи остановленной модели остаются доступны в пределах срока хранения и выбранного интервала.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 22
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{job=\"llm-logs\", compose_project=~\"${project:regex}\", service_name=~\"${model:regex}\"}",
+          "queryType": "range",
+          "maxLines": 1000,
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      }
+    }
+  ],
+  "links": [
+    {
+      "title": "Метрики и GPU",
+      "type": "link",
+      "url": "/d/local-qwen",
+      "keepTime": true
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "model",
+        "label": "Модель / job",
+        "type": "custom",
+        "query": "qwen,gemma",
+        "multi": true,
+        "includeAll": true,
+        "allValue": "qwen|gemma",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": [
+          {
+            "text": "qwen",
+            "value": "qwen",
+            "selected": false
+          },
+          {
+            "text": "gemma",
+            "value": "gemma",
+            "selected": false
+          }
+        ]
+      },
+      {
+        "name": "project",
+        "label": "Compose project",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "loki"
+        },
+        "query": {
+          "type": 1,
+          "label": "compose_project",
+          "stream": "{job=\"llm-logs\"}",
+          "refId": "LokiVariableQueryEditor-Project"
+        },
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": [],
+        "sort": 1
+      }
+    ]
+  }
+}

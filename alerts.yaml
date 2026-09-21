@@ -1,0 +1,17 @@
+groups:
+  - name: local-inference
+    rules:
+      - alert: ScrapeTargetDown
+        expr: up{job!~"llama|qwen|gemma"} == 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Metrics endpoint unavailable: {{ $labels.job }}'
+      - alert: LlamaQueueWaiting
+        expr: llamacpp:requests_deferred > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Llama requests have been queued for over 10 minutes
