@@ -7,6 +7,33 @@ x-common: &common
       max-size: 10m
       max-file: '3'
 services:
+  qwen-image:
+    <<: *common
+    profiles: ["qwen-image"]
+    build:
+      context: ./qwen-image
+    image: local/ml-qwen-image:1
+    init: true
+    user: "${QWEN_IMAGE_UID:-${SDXL_UID:-1000}}:${QWEN_IMAGE_GID:-${SDXL_GID:-1000}}"
+    stop_grace_period: 75s
+    environment:
+      CUDA_VISIBLE_DEVICES: ${QWEN_IMAGE_GPU0:-${SDXL_GPU0:-0}},${QWEN_IMAGE_GPU1:-${SDXL_GPU1:-1}}
+      NVIDIA_VISIBLE_DEVICES: ${QWEN_IMAGE_GPU0:-${SDXL_GPU0:-0}},${QWEN_IMAGE_GPU1:-${SDXL_GPU1:-1}}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      QWEN_IMAGE_VRAM_RESERVE_GIB: ${QWEN_IMAGE_VRAM_RESERVE_GIB:-1.5}
+      QWEN_IMAGE_DIT: ${QWEN_IMAGE_DIT:-base}
+    gpus: all
+    volumes:
+      - ./models/qwen-image-2.1:/models:ro
+      - ./outputs/qwen-image:/data
+    ports:
+      - "127.0.0.1:8083:8188"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8188/system_stats', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      start_period: 120s
+      retries: 4
   sdxl:
     <<: *common
     profiles: ["sdxl"]

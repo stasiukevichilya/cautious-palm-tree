@@ -1,0 +1,10 @@
+{
+  "1": {"class_type": "QwenImageDiTGPU", "inputs": {"model_name": "qwen-image-2.1-Q8_0.gguf"}},
+  "2": {"class_type": "QwenImageEncoderGPU", "inputs": {"encoder_name": "qwen3vl_8b_heretic-Q6_K.gguf"}},
+  "3": {"class_type": "QwenImageVAEGPU", "inputs": {"vae_name": "qwen_image_2.1_vae_bf16.safetensors"}},
+  "4": {"class_type": "TextEncodeQwenImage21", "inputs": {"clip": ["2", 0], "prompt": "A red ceramic teapot on a white table, studio photography", "negative_prompt": "", "vae": ["3", 0], "resolution": 1024}},
+  "5": {"class_type": "QwenImage21Cache", "inputs": {"model": ["1", 0], "device": "gpu", "dtype": "default"}},
+  "6": {"class_type": "KSampler", "inputs": {"model": ["5", 0], "positive": ["4", 0], "negative": ["4", 1], "latent_image": ["4", 2], "seed": 42, "steps": 25, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+  "7": {"class_type": "VAEDecodeTiled", "inputs": {"samples": ["6", 0], "vae": ["3", 0], "tile_size": 512, "overlap": 64, "temporal_size": 64, "temporal_overlap": 8}},
+  "8": {"class_type": "SaveImage", "inputs": {"images": ["7", 0], "filename_prefix": "qwen-image21-unsloth-q8"}}
+}

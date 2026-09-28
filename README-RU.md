@@ -1,5 +1,9 @@
 Локальный Qwen3.8-27B: RTX 4070 Ti SUPER 16 GiB + RTX 3080 Ti 12 GiB
 
+Qwen-Image 2.1: полный генератор с Heretic GGUF-энкодером на двух GPU,
+ComfyUI и HTTP API. [Подготовка и запуск](QWEN-IMAGE-RU.md): `make qwen-image`,
+интерфейс http://127.0.0.1:8083. Вариант с DiT unsloth Q8_0: `make qwen-image-unsloth`.
+
 SDXL Base 1.0: отдельный профиль генерации изображений с HTTP API и веб-интерфейсом.
 Подготовка, режимы одной/двух GPU и проверки: [SDXL-RU.md](SDXL-RU.md).
 Запуск после подготовки: `make sdxl`, интерфейс http://127.0.0.1:8082.

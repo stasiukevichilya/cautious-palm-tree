@@ -1,0 +1,51 @@
+{
+  "files": [
+    {
+      "repo": "pottokao/Qwen-Image-2.1-DiT-GGUF",
+      "revision": "fd2acda0a8e993a74db1d5497812c5e3d9486be2",
+      "file": "qwen_image_2.1-Q6_K.gguf",
+      "path": "diffusion_models/qwen_image_2.1-Q6_K.gguf",
+      "size": 5996875936,
+      "sha256": "33ec31b28d1883fbf77ba7afdf0feec0b5ad7b0ef3c7bb229d88ace49137399a"
+    },
+    {
+      "repo": "pottokao/Qwen-Image-2.1-Text-Encoder-Heretic-GGUF",
+      "revision": "23813717f7f9282b372c23c7207468a7a168fa68",
+      "file": "qwen3vl_8b_heretic-Q6_K.gguf",
+      "path": "text_encoders/qwen3vl_8b_heretic-Q6_K.gguf",
+      "size": 6876620864,
+      "sha256": "5f126e8173690a565412f6834f88fc4c7046bcb7045f1a9c2daad568e733046a"
+    },
+    {
+      "repo": "pottokao/Qwen-Image-2.1-Text-Encoder-Heretic-GGUF",
+      "revision": "23813717f7f9282b372c23c7207468a7a168fa68",
+      "file": "mmproj-qwen3vl_8b_heretic-f16.gguf",
+      "path": "text_encoders/mmproj-qwen3vl_8b_heretic-f16.gguf",
+      "size": 1159030464,
+      "sha256": "4649839491c8df1ebc9bed2de158ad2a45b53ed1d3b311d92a69056b6764f101"
+    },
+    {
+      "repo": "Comfy-Org/Qwen-Image-2.1",
+      "revision": "9a44dbdb47cefd046be9c0a13476192f34c8db8e",
+      "file": "vae/qwen_image_2.1_vae_bf16.safetensors",
+      "path": "vae/qwen_image_2.1_vae_bf16.safetensors",
+      "size": 675509688,
+      "sha256": "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9"
+    }
+  ],
+  "variants": {
+    "unsloth-q8_0": {
+      "workflow": "qwen-image21-unsloth-q8",
+      "files": [
+        {
+          "repo": "unsloth/Qwen-Image-2.1-GGUF",
+          "revision": "2c31ccd392b367a6637841a143813320a02dff55",
+          "file": "qwen-image-2.1-Q8_0.gguf",
+          "path": "diffusion_models/qwen-image-2.1-Q8_0.gguf",
+          "size": 7640860384,
+          "sha256": "c0ed4b2ffd56cbe9c3df1e4a4098045256484ebe94ba5a7e4338d35ec046baa5"
+        }
+      ]
+    }
+  }
+}

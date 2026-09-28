@@ -1,0 +1,6 @@
+local:
+  base_path: /models
+  is_default: true
+  diffusion_models: diffusion_models
+  text_encoders: text_encoders
+  vae: vae

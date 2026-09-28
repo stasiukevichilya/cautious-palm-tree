@@ -68,15 +68,20 @@
         "name": "model",
         "label": "Модель / job",
         "type": "custom",
-        "query": "qwen,gemma,sdxl",
+        "query": "qwen,gemma,sdxl,qwen-image",
         "multi": true,
         "includeAll": true,
-        "allValue": "qwen|gemma|sdxl",
+        "allValue": "qwen|gemma|sdxl|qwen-image",
         "current": {
           "text": "All",
           "value": "$__all"
         },
         "options": [
+          {
+            "text": "qwen-image",
+            "value": "qwen-image",
+            "selected": false
+          },
           {
             "text": "sdxl",
             "value": "sdxl",
