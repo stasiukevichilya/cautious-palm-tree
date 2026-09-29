@@ -1,0 +1,24 @@
+{
+  "uid": "local-qwen-image",
+  "title": "Local Qwen-Image (ComfyUI)",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "refresh": "5s",
+  "time": {"from": "now-1h", "to": "now"},
+  "tags": ["qwen-image", "comfyui", "gpu"],
+  "panels": [
+    {"id": 1, "title": "Ready", "type": "stat", "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "description": "0: профиль остановлен, endpoint недоступен либо видимых CUDA-устройств меньше ожидаемых двух.", "fieldConfig": {"defaults": {"unit": "short", "noValue": "Нет данных", "mappings": [{"type": "value", "options": {"0": {"text": "Остановлена / недоступна", "color": "gray"}, "1": {"text": "Доступна", "color": "green"}}}]}, "overrides": []}, "targets": [{"refId": "A", "expr": "qwen_image_ready"}]},
+    {"id": 2, "title": "Queued / running", "type": "stat", "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"refId": "A", "expr": "qwen_image_queue_pending", "legendFormat": "Queued"}, {"refId": "B", "expr": "qwen_image_queue_running", "legendFormat": "Running"}]},
+    {"id": 3, "title": "Images", "type": "stat", "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"refId": "A", "expr": "increase(qwen_image_generations_total{result=\"success\"}[$__range])"}]},
+    {"id": 4, "title": "Errors", "type": "stat", "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"refId": "A", "expr": "increase(qwen_image_generations_total{result=\"error\"}[$__range])"}]},
+    {"id": 5, "title": "Seconds per image (mean)", "type": "timeseries", "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}, "targets": [{"refId": "A", "expr": "rate(qwen_image_generation_seconds_sum[$__rate_interval]) / rate(qwen_image_generation_seconds_count[$__rate_interval])"}]},
+    {"id": 6, "title": "Queue depth", "type": "timeseries", "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}, "targets": [{"refId": "A", "expr": "qwen_image_queue_pending", "legendFormat": "Queued"}, {"refId": "B", "expr": "qwen_image_queue_running", "legendFormat": "Running"}]},
+    {"id": 7, "title": "Service CUDA free (PyTorch)", "type": "timeseries", "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []}, "targets": [{"refId": "A", "expr": "qwen_image_cuda_free_bytes", "legendFormat": "CUDA {{device}}"}]},
+    {"id": 8, "title": "GPU free VRAM (whole machine)", "type": "timeseries", "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []}, "targets": [{"refId": "A", "expr": "nvidia_smi_memory_free_bytes{job=\"gpu\"}", "legendFormat": "{{uuid}}"}]},
+    {"id": 9, "title": "GPU utilization (whole machine)", "type": "timeseries", "gridPos": {"x": 0, "y": 20, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []}, "targets": [{"refId": "A", "expr": "nvidia_smi_utilization_gpu_ratio{job=\"gpu\"}", "legendFormat": "{{uuid}}"}]},
+    {"id": 10, "type": "text", "title": "Как читать показатели", "gridPos": {"x": 12, "y": 20, "w": 12, "h": 8}, "options": {"mode": "markdown", "content": "Длительность считается от постановки промпта в очередь до завершения (включая ожидание в очереди и загрузку весов при первом запросе). Короткие генерации, завершившиеся между scrape-ами, попадают в счётчик, но могут не попасть в histogram.\n\n«Service CUDA free» — PyTorch-вид сервиса; «whole machine» — все процессы Windows/WSL через NVIDIA exporter. После перезапуска контейнера счётчики сбрасываются; increase учитывает видимые сбросы. Логи — в общем dashboard моделей (модель `qwen-image`)."}}
+  ],
+  "links": [{"title": "Model logs", "type": "link", "url": "/d/local-llm-logs", "keepTime": true}, {"title": "LLM and GPU", "type": "link", "url": "/d/local-qwen", "keepTime": true}, {"title": "SDXL", "type": "link", "url": "/d/local-sdxl", "keepTime": true}, {"title": "Qwen-Image UC", "type": "link", "url": "/d/local-qwen-image-uc", "keepTime": true}, {"title": "Telegram bot", "type": "link", "url": "/d/local-tgbot", "keepTime": true}]
+}

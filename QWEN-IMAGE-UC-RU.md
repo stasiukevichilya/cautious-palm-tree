@@ -61,7 +61,9 @@ pipeline использует 40–50 шагов; negative prompt не дейс�
   API настроек и игнорируются при чтении из базы (`tgbot/settings.py`,
   `ALLOWED_BACKENDS`). Это основная гарантия.
 - Сервис подключен только к своей docker-сети `qwen-image-uc`, поэтому имя
-  `qwen-image-uc` из контейнера бота не разрешается. На Docker Desktop это
+  `qwen-image-uc` из контейнера бота не разрешается. Единственное исключение —
+  prometheus, подключённый к этой сети только для скрейпинга
+  `/local-qwen-image-uc/metrics`; бот на ней отсутствует. На Docker Desktop это
   не полная изоляция: проверено, что из контейнера бота сервис доступен по IP
   чужой bridge-сети и через `host.docker.internal:8085`, а запросы с хоста и из
   контейнеров приходят с одного адреса шлюза, так что фильтр по IP невозможен.
@@ -101,6 +103,8 @@ RTX 4070 Ti Super (16 GB), CPU 16 потоков под WSL, seed 7, 25 шаго
 PNG: `outputs/qwen-image-uc/output`; workflows и настройки UI:
 `outputs/qwen-image-uc/user`. Автоматической очистки нет. Логи идут в общий
 dashboard Grafana (модель `qwen-image-uc`); тексты промптов ComfyUI в лог не
-пишет. Аутентификации нет — не публикуйте порт наружу.
+пишет. Prometheus собирает `/local-qwen-image-uc/metrics` (job
+`qwen-image-uc`); собственный dashboard — http://127.0.0.1:3055/d/local-qwen-image-uc.
+Аутентификации нет — не публикуйте порт наружу.
 
 Лицензия: Qwen Research License, как у базовой модели.

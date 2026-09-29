@@ -1,10 +1,12 @@
 """Loaders pinned to the model card placement: DiT and VAE fully on cuda:0, text encoder fully on CPU."""
 import json
 import logging
+import time
 import weakref
 from pathlib import Path
 
 from aiohttp import web
+from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, generate_latest
 from server import PromptServer
 
 import torch
@@ -15,6 +17,88 @@ from comfy.cli_args import args
 log = logging.getLogger("qwen-image-uc")
 MANIFEST = "/opt/qwen-image-uc/models.json"
 verified_models = {}
+EXPECTED_CUDA_DEVICES = 1
+
+
+class Metrics:
+    """Prometheus exposition for this profile; state lives in the process and resets on restart."""
+
+    def __init__(self):
+        self.registry = CollectorRegistry()
+        self.ready = Gauge("qwen_image_uc_ready", "1 when the expected number of CUDA devices is visible",
+                           registry=self.registry)
+        self.queue_running = Gauge("qwen_image_uc_queue_running", "Prompts being executed", registry=self.registry)
+        self.queue_pending = Gauge("qwen_image_uc_queue_pending", "Prompts waiting in the queue", registry=self.registry)
+        self.generations = Counter("qwen_image_uc_generations_total", "Finished prompts", ["result"],
+                                   registry=self.registry)
+        self.duration = Histogram("qwen_image_uc_generation_seconds", "Prompt duration from enqueue to completion",
+                                  buckets=(10, 30, 60, 120, 240, 480, 960, 1920), registry=self.registry)
+        self.cuda_free = Gauge("qwen_image_uc_cuda_free_bytes", "Free VRAM per device", ["device"],
+                               registry=self.registry)
+        self.cuda_reserved_peak = Gauge("qwen_image_uc_cuda_reserved_peak_bytes",
+                                        "Peak VRAM reserved by torch per device", ["device"],
+                                        registry=self.registry)
+        self.first_seen = {}
+        self.finished = set()
+
+    def scrape(self, prompt_queue):
+        running, pending = prompt_queue.get_current_queue_volatile()
+        self.queue_running.set(len(running))
+        self.queue_pending.set(len(pending))
+        now = time.monotonic()
+        for item in (*running, *pending):
+            self.first_seen.setdefault(item[1], now)
+        history = prompt_queue.get_history()
+        for prompt_id, entry in history.items():
+            if prompt_id in self.finished:
+                continue
+            status = (entry or {}).get("status") or {}
+            result = status.get("status_str")
+            self.generations.labels(result if result in ("success", "error") else "error").inc()
+            self.finished.add(prompt_id)
+            seconds = self._duration(entry, prompt_id)
+            self.first_seen.pop(prompt_id, None)
+            if seconds is not None:
+                self.duration.observe(seconds)
+        for prompt_id in [p for p, seen_at in self.first_seen.items() if now - seen_at > 3600 and p not in history]:
+            self.first_seen.pop(prompt_id, None)
+        self._gpu_gauges()
+        return generate_latest(self.registry)
+
+    def _duration(self, entry, prompt_id):
+        item = (entry or {}).get("prompt")
+        if isinstance(item, tuple):
+            extra = item[3] if len(item) > 3 else None
+            create_time = extra.get("create_time") if isinstance(extra, dict) else None
+            if isinstance(create_time, (int, float)) and not isinstance(create_time, bool):
+                return max(0.0, time.time() - create_time / 1000.0)
+        seen_at = self.first_seen.get(prompt_id)
+        if seen_at is not None:
+            return max(0.0, time.monotonic() - seen_at)
+        return None
+
+    def _gpu_gauges(self):
+        try:
+            count = torch.cuda.device_count()
+        except Exception:
+            count = 0
+        self.ready.set(int(count == EXPECTED_CUDA_DEVICES))
+        for index in range(count):
+            try:
+                free, _total = torch.cuda.mem_get_info(index)
+                self.cuda_free.labels(str(index)).set(free)
+                self.cuda_reserved_peak.labels(str(index)).set(torch.cuda.max_memory_reserved(index))
+            except Exception:
+                continue
+
+
+METRICS = Metrics()
+
+
+@PromptServer.instance.routes.get("/local-qwen-image-uc/metrics")
+async def metrics_status(request):
+    return web.Response(body=METRICS.scrape(PromptServer.instance.prompt_queue),
+                        headers={"Content-Type": CONTENT_TYPE_LATEST})
 
 
 def tensor_devices(model):

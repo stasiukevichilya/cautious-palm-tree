@@ -2,6 +2,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import time
 import types
 import unittest
 from unittest.mock import Mock, patch
@@ -79,7 +80,8 @@ class PlacementTests(unittest.TestCase):
                    "comfy.cli_args": types.SimpleNamespace(args=self.args),
                    "aiohttp": types.SimpleNamespace(web=Mock()),
                    "server": types.SimpleNamespace(PromptServer=types.SimpleNamespace(
-                       instance=types.SimpleNamespace(routes=routes)))}
+                       instance=types.SimpleNamespace(routes=routes))),
+                   "prometheus_client": MetricsTests.fake_prometheus_client()}
         with patch.dict(sys.modules, modules):
             self.module = load("local_qwen_uc", ROOT / "local_nodes/__init__.py")
 
@@ -121,6 +123,161 @@ class PlacementTests(unittest.TestCase):
         manifest = ROOT / "models.json"
         self.assertEqual(self.module.pinned_file("diffusion_models", manifest), ["qwen-image-2.1-UC-Q4_K_M.gguf"])
         self.assertEqual(self.module.pinned_file("text_encoders", manifest), ["qwen3vl_8b_int8_convrot.safetensors"])
+
+
+class MetricsTests(unittest.TestCase):
+    @staticmethod
+    def fake_prometheus_client():
+        module = types.ModuleType("prometheus_client")
+        module.CONTENT_TYPE_LATEST = "text/plain; version=0.0.4"
+
+        class CollectorRegistry:
+            def __init__(self):
+                self.metrics = {}
+                self.samples = {}
+
+        class Labeled:
+            def __init__(self, metric, labels):
+                self.metric, self.labels = metric, tuple(labels)
+
+            def inc(self, amount=1.0):
+                key = (self.metric.name, self.labels)
+                self.metric.registry.samples[key] = self.metric.registry.samples.get(key, 0.0) + amount
+
+            def set(self, value):
+                self.metric.registry.samples[(self.metric.name, self.labels)] = float(value)
+
+            def observe(self, value):
+                registry = self.metric.registry
+                for suffix, add in (("_count", 1.0), ("_sum", float(value))):
+                    key = (self.metric.name + suffix, self.labels)
+                    registry.samples[key] = registry.samples.get(key, 0.0) + add
+
+        class Metric:
+            def __init__(self, name, documentation=None, labelnames=(), registry=None, **ignored):
+                self.name, self.labelnames = name, tuple(labelnames)
+                self.registry = registry or CollectorRegistry()
+                self.registry.metrics[self.name] = self
+
+            def labels(self, *values):
+                return Labeled(self, values)
+
+            def inc(self, amount=1.0):
+                self.labels().inc(amount)
+
+            def set(self, value):
+                self.labels().set(value)
+
+            def observe(self, value):
+                self.labels().observe(value)
+
+        class Counter(Metric):
+            pass
+
+        class Gauge(Metric):
+            pass
+
+        class Histogram(Metric):
+            pass
+
+        def generate_latest(registry):
+            lines = []
+            for (name, labels), value in sorted(registry.samples.items()):
+                if name.endswith("_count"):
+                    base = name[:-6]
+                elif name.endswith("_sum"):
+                    base = name[:-4]
+                else:
+                    base = name
+                metric = registry.metrics.get(base)
+                labels_part = ""
+                if metric is not None and metric.labelnames:
+                    labels_part = "{" + ",".join(f'{n}="{v}"' for n, v in zip(metric.labelnames, labels)) + "}"
+                lines.append(f"{name}{labels_part} {value}")
+            return ("\n".join(lines) + "\n").encode()
+
+        module.CollectorRegistry = CollectorRegistry
+        module.Counter = Counter
+        module.Gauge = Gauge
+        module.Histogram = Histogram
+        module.generate_latest = generate_latest
+        return module
+
+    @staticmethod
+    def value(text, prefix):
+        for line in text.splitlines():
+            if line.startswith(prefix):
+                return float(line.rsplit(" ", 1)[1])
+        return None
+
+    def setUp(self):
+        self.args = types.SimpleNamespace(highvram=True, gpu_only=False)
+        self.torch = types.SimpleNamespace(device=lambda x: x, cuda=Mock())
+        self.torch.cuda.device_count.return_value = 1
+        self.torch.cuda.mem_get_info.side_effect = lambda i: (8 * 1024**3, 16 * 1024**3)
+        self.torch.cuda.max_memory_reserved.side_effect = lambda i: 2 * 1024**3
+        self.mm = types.ModuleType("comfy.model_management")
+        self.mm.load_models_gpu = Mock()
+        comfy = types.ModuleType("comfy")
+        comfy.model_management = self.mm
+        routes = types.SimpleNamespace(get=lambda path: lambda fn: fn)
+        modules = {"torch": self.torch, "nodes": Mock(), "comfy": comfy, "comfy.model_management": self.mm,
+                   "comfy.cli_args": types.SimpleNamespace(args=self.args),
+                   "aiohttp": types.SimpleNamespace(web=Mock()),
+                   "server": types.SimpleNamespace(PromptServer=types.SimpleNamespace(
+                       instance=types.SimpleNamespace(routes=routes))),
+                   "prometheus_client": self.fake_prometheus_client()}
+        with patch.dict(sys.modules, modules):
+            self.module = load("local_qwen_uc", ROOT / "local_nodes/__init__.py")
+        self.history, self.running, self.pending = {}, [], []
+
+    def queue(self):
+        return types.SimpleNamespace(get_current_queue_volatile=lambda: (list(self.running), list(self.pending)),
+                                     get_history=lambda: dict(self.history))
+
+    def test_queue_and_gpu_gauges(self):
+        self.pending = [(1, "p-1", {}, {}, [], None)]
+        text = self.module.Metrics().scrape(self.queue()).decode()
+        self.assertEqual(self.value(text, "qwen_image_uc_queue_running"), 0.0)
+        self.assertEqual(self.value(text, "qwen_image_uc_queue_pending"), 1.0)
+        self.assertEqual(self.value(text, "qwen_image_uc_ready"), 1.0)
+        self.assertEqual(self.value(text, 'qwen_image_uc_cuda_free_bytes{device="0"}'), 8 * 1024**3)
+        self.assertEqual(self.value(text, 'qwen_image_uc_cuda_reserved_peak_bytes{device="0"}'), 2 * 1024**3)
+
+    def test_finished_prompts_are_counted_once(self):
+        now = time.time()
+        self.history = {
+            "p-ok": {"prompt": (0, "p-ok", {}, {"create_time": int((now - 42) * 1000)}, []),
+                     "outputs": {}, "status": {"status_str": "success", "completed": True, "messages": []}},
+            "p-err": {"prompt": (1, "p-err", {}, {"create_time": int((now - 63) * 1000)}, []),
+                      "outputs": {}, "status": {"status_str": "error", "completed": False, "messages": ["boom"]}},
+        }
+        metrics = self.module.Metrics()
+        text = metrics.scrape(self.queue()).decode()
+        self.assertEqual(self.value(text, 'qwen_image_uc_generations_total{result="success"}'), 1.0)
+        self.assertEqual(self.value(text, 'qwen_image_uc_generations_total{result="error"}'), 1.0)
+        self.assertEqual(self.value(text, "qwen_image_uc_generation_seconds_count"), 2.0)
+        total = self.value(text, "qwen_image_uc_generation_seconds_sum")
+        self.assertTrue(104.0 <= total <= 110.0, total)
+        again = metrics.scrape(self.queue()).decode()
+        self.assertEqual(self.value(again, 'qwen_image_uc_generations_total{result="success"}'), 1.0)
+        self.assertEqual(self.value(again, "qwen_image_uc_generation_seconds_count"), 2.0)
+
+    def test_duration_falls_back_to_first_sighting(self):
+        self.running = [(0, "p-live", {}, {}, [], None)]
+        metrics = self.module.Metrics()
+        metrics.scrape(self.queue())
+        self.history = {"p-live": {"prompt": (0, "p-live", {}, {}, []),
+                                   "outputs": {}, "status": {"status_str": "success", "completed": True,
+                                                             "messages": []}}}
+        text = metrics.scrape(self.queue()).decode()
+        self.assertEqual(self.value(text, "qwen_image_uc_generation_seconds_count"), 1.0)
+        self.assertGreaterEqual(self.value(text, "qwen_image_uc_generation_seconds_sum"), 0.0)
+
+    def test_ready_requires_expected_devices(self):
+        self.torch.cuda.device_count.return_value = 2
+        text = self.module.Metrics().scrape(self.queue()).decode()
+        self.assertEqual(self.value(text, "qwen_image_uc_ready"), 0.0)
 
 
 if __name__ == "__main__":

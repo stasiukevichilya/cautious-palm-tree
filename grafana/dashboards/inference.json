@@ -976,6 +976,30 @@
       "type": "link",
       "url": "/d/local-llm-logs",
       "keepTime": true
+    },
+    {
+      "title": "SDXL",
+      "type": "link",
+      "url": "/d/local-sdxl",
+      "keepTime": true
+    },
+    {
+      "title": "Qwen-Image",
+      "type": "link",
+      "url": "/d/local-qwen-image",
+      "keepTime": true
+    },
+    {
+      "title": "Qwen-Image UC",
+      "type": "link",
+      "url": "/d/local-qwen-image-uc",
+      "keepTime": true
+    },
+    {
+      "title": "Telegram bot",
+      "type": "link",
+      "url": "/d/local-tgbot",
+      "keepTime": true
     }
   ]
 }

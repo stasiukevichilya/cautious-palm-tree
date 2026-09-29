@@ -10,6 +10,7 @@ WORKDIR /opt/ComfyUI
 COPY --from=qwenimage constraints.txt requirements.lock /opt/
 RUN pip install --no-cache-dir -c /opt/constraints.txt -c /opt/requirements.lock \
       -r requirements.txt -r custom_nodes/ComfyUI-GGUF/requirements.txt \
+      prometheus_client==0.26.0 \
     && pip check && pip list --format=freeze > /opt/qwen-image-uc-installed.txt
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/* \

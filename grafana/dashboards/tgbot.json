@@ -1,0 +1,21 @@
+{
+  "uid": "local-tgbot",
+  "title": "Local Telegram bot",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "refresh": "15s",
+  "time": {"from": "now-1h", "to": "now"},
+  "tags": ["tgbot", "bot"],
+  "panels": [
+    {"id": 1, "title": "Polling", "type": "stat", "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "description": "0: токен не задан либо невалиден и бот не опрашивает Telegram (алерт TgbotNotPolling).", "fieldConfig": {"defaults": {"unit": "short", "noValue": "Нет данных", "mappings": [{"type": "value", "options": {"0": {"text": "Не опрашивает", "color": "red"}, "1": {"text": "Опрашивает", "color": "green"}}}]}, "overrides": []}, "targets": [{"refId": "A", "expr": "tgbot_polling"}]},
+    {"id": 2, "title": "Ждут модель", "type": "stat", "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "description": "По одному активному запросу на модель (llm, image); остальные стоят в очереди.", "fieldConfig": {"defaults": {"unit": "short", "noValue": "Нет данных"}, "overrides": []}, "targets": [{"refId": "A", "expr": "tgbot_waiting_requests", "legendFormat": "{{kind}}"}]},
+    {"id": 3, "title": "Запросы за выбранный период", "type": "stat", "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "short", "noValue": "Нет данных"}, "overrides": []}, "targets": [{"refId": "A", "expr": "sum by(result)(increase(tgbot_requests_total[$__range]))", "legendFormat": "{{result}}"}]},
+    {"id": 4, "title": "Ошибки за выбранный период", "type": "stat", "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "short", "noValue": "Нет данных"}, "overrides": []}, "targets": [{"refId": "A", "expr": "sum(increase(tgbot_requests_total{result=~\"error|unavailable\"}[$__range]))"}]},
+    {"id": 5, "title": "Запросы по kind и результату", "type": "timeseries", "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "req/s"}, "overrides": []}, "targets": [{"refId": "A", "expr": "sum by(kind, result)(rate(tgbot_requests_total[$__rate_interval]))", "legendFormat": "{{kind}} · {{result}}"}], "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi"}}},
+    {"id": 6, "title": "Длительность запроса (mean)", "type": "timeseries", "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}, "targets": [{"refId": "A", "expr": "sum by(kind)(rate(tgbot_request_seconds_sum[$__rate_interval])) / sum by(kind)(rate(tgbot_request_seconds_count[$__rate_interval]))", "legendFormat": "{{kind}}"}], "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi"}}},
+    {"id": 7, "type": "text", "title": "Как читать показатели", "gridPos": {"x": 0, "y": 12, "w": 24, "h": 5}, "options": {"mode": "markdown", "content": "Бот пересылает сообщения в одну запущенную LLM и один генератор изображений; одновременно выполняется по одному запросу на каждую модель, остальные ждут (панель «Ждут модель»). `cancelled` — прерывание через /cancel, `unavailable` — модель не запущена или недоступна, `error` — сбой при выполнении.\n\nПосле перезапуска контейнера счётчики сбрасываются; increase учитывает видимые сбросы, но не восстанавливает пропущенные измерения. Логи бота — в общем dashboard моделей (модель `tgbot`)."}}
+  ],
+  "links": [{"title": "Логи моделей", "type": "link", "url": "/d/local-llm-logs", "keepTime": true}, {"title": "LLM and GPU", "type": "link", "url": "/d/local-qwen", "keepTime": true}]
+}

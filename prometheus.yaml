@@ -12,6 +12,16 @@ scrape_configs:
     static_configs:
       - targets: ['tgbot:8080']
 
+  - job_name: qwen-image
+    metrics_path: /local-qwen-image/metrics
+    static_configs:
+      - targets: ['qwen-image:8188']
+
+  - job_name: qwen-image-uc
+    metrics_path: /local-qwen-image-uc/metrics
+    static_configs:
+      - targets: ['qwen-image-uc:8188']
+
   - job_name: qwen
     static_configs:
       - targets: ['qwen:8080']

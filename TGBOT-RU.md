@@ -145,8 +145,9 @@ bridge-сетей по IP, поэтому только сетевой изоля
 Токен не выводится в логи: фильтр заменяет его на `***`. Тексты сообщений
 в логи тоже не пишутся. Логи: `make logs-tgbot` и общий dashboard Grafana (модель
 `tgbot`). Метрики Prometheus (job `tgbot`): `tgbot_requests_total{kind,result}`,
-`tgbot_request_seconds`, `tgbot_waiting_requests`, `tgbot_polling`. Алерт
-`TgbotNotPolling` срабатывает, если сервис запущен без рабочего токена.
+`tgbot_request_seconds`, `tgbot_waiting_requests`, `tgbot_polling`; dashboard —
+http://127.0.0.1:3055/d/local-tgbot. Алерт `TgbotNotPolling` срабатывает, если
+сервис запущен без рабочего токена.
 
 `make tgbot-browser-test` проверяет страницу настроек в headless Chromium.
 Скриншоты сохраняются в `outputs/tgbot/screenshots`. Для него нужен запущенный `make tgbot`.

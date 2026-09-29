@@ -170,6 +170,9 @@ unsloth помещаются, но не добавлены в манифест.
 - `GET /queue`, `POST /interrupt`: очередь и прерывание текущей генерации.
 - `GET /system_stats`: доступность сервера; не означает прогрев всех весов.
 - `GET /local-qwen-image/gpu`: устройства загруженных моделей и CUDA-пики.
+- `GET /local-qwen-image/metrics`: метрики Prometheus (готовность, очередь,
+  завершённые промпты с длительностью, свободная VRAM); их скрейпит Prometheus
+  (job `qwen-image`).
 
 Готовый API graph: `qwen-image/workflows/qwen-image21.api.json`.
 Пример клиента с ожиданием результата: `qwen-image/smoke.py`
@@ -191,8 +194,12 @@ PNG: `outputs/qwen-image/output`. Отчеты: подкаталог `benchmarks
 Входные изображения, workflows и настройки: `outputs/qwen-image/input` и
 `outputs/qwen-image/user`. Автоматической очистки PNG нет. Каталог смонтирован
 с правами пользователя; не запускайте подготовку через sudo.
-Логи входят в общий Grafana dashboard моделей; GPU-метрики уже собирает
-существующий NVIDIA exporter.
+Логи входят в общий Grafana dashboard моделей (модель `qwen-image`). Prometheus
+собирает `/local-qwen-image/metrics` (job `qwen-image`): готовность, очередь,
+длительность генераций и VRAM сервиса; собственный dashboard —
+http://127.0.0.1:3055/d/local-qwen-image. GPU-метрики всей машины собирает
+существующий NVIDIA exporter. Остановленный профиль не вызывает
+ScrapeTargetDown; после перезапуска контейнера счётчики метрик сбрасываются.
 
 Сервис доступен только через loopback хоста. В ComfyUI нет настроенной
 аутентификации, поэтому не публикуйте его напрямую в Интернет.

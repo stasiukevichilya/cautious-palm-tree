@@ -312,6 +312,8 @@ services:
       - prometheus-data:/prometheus
     ports:
       - 127.0.0.1:9090:9090
+    # Second network only so the scraper can reach the isolated Qwen-Image UC service.
+    networks: [default, qwen-image-uc]
   tempo:
     <<: *common
     image: ${TEMPO_IMAGE:-grafana/tempo:2.9.0}

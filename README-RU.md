@@ -149,9 +149,9 @@ bash ./docker-wsl.sh compose logs --tail=100 dsh
 
 7. Grafana и проверка OpenTelemetry
 
-Откройте http://127.0.0.1:3000, пользователь admin. Пароль — значение GRAFANA_PASSWORD в .env. Источники Prometheus и Tempo и dashboard Local Qwen inference provisioned автоматически.
+Откройте http://127.0.0.1:3055, пользователь admin. Пароль — значение GRAFANA_PASSWORD в .env. Источники Prometheus, Tempo и Loki и dashboards LLM (local-qwen), SDXL, Qwen-Image, Qwen-Image UC, Telegram bot и логов provisioned автоматически; между ними есть перекрёстные ссылки.
 
-Схема: DSH + LoongSuite → OTLP/HTTP → Collector → Tempo (traces), Collector → Prometheus (metrics); llama /metrics и gpu-exporter → Prometheus; Grafana читает оба хранилища. Стандартный session-telemetry-otel DSH не заменяет GenAI tracing-плагин.
+Схема: DSH + LoongSuite → OTLP/HTTP → Collector → Tempo (traces), Collector → Prometheus (metrics); llama, sdxl, tgbot, ComfyUI-сервисы (через /local-qwen-image*/metrics) и gpu-exporter → Prometheus; Loki ← Alloy ← docker-логи; Grafana читает все хранилища. Стандартный session-telemetry-otel DSH не заменяет GenAI tracing-плагин.
 
 После запроса из DSH подождите 60–90 секунд:
 
