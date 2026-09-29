@@ -13,13 +13,21 @@ def sha256(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+PROFILES = {"qwen-image": ("qwen-image/models.json", "models/qwen-image-2.1"),
+            "qwen-image-uc": ("qwen-image-uc/models.json", "models/qwen-image-2.1-uc")}
+
+
 def main(argv=None):
-    manifest = json.loads((ROOT / "qwen-image/models.json").read_text())
     parser = argparse.ArgumentParser()
-    parser.add_argument("--variant", action="append", default=[], choices=sorted(manifest.get("variants", {})),
-                        help="also fetch an optional DiT variant; repeatable")
+    parser.add_argument("--profile", choices=sorted(PROFILES), default="qwen-image")
+    parser.add_argument("--variant", action="append", default=[], help="also fetch an optional DiT variant; repeatable")
     args = parser.parse_args(argv)
-    destination = ROOT / "models/qwen-image-2.1"
+    manifest_path, destination = PROFILES[args.profile]
+    manifest = json.loads((ROOT / manifest_path).read_text())
+    unknown = set(args.variant) - set(manifest.get("variants", {}))
+    if unknown:
+        parser.error(f"unknown variant(s) for {args.profile}: {sorted(unknown)}")
+    destination = ROOT / destination
     destination.mkdir(parents=True, exist_ok=True)
     for item in manifest["files"] + [x for name in args.variant for x in manifest["variants"][name]["files"]]:
         target = destination / item["path"]
@@ -42,7 +50,7 @@ def main(argv=None):
     temporary = destination / "manifest.json.tmp"
     temporary.write_text(json.dumps(manifest, indent=2) + "\n")
     temporary.replace(destination / "manifest.json")
-    print("Qwen-Image-2.1 snapshot complete", flush=True)
+    print(f"{args.profile} snapshot complete", flush=True)
 
 
 if __name__ == "__main__":

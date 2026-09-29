@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Telegram Bot</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header><a class="brand" href="/">Telegram <span>Bot</span></a><span id="connection" role="status">Нет ключа</span></header>
+  <main>
+    <section id="login" class="panel narrow">
+      <h1>Вход</h1>
+      <form id="login-form">
+        <label for="admin-key">Ключ администратора (TGBOT_ADMIN_KEY из .env)</label>
+        <input id="admin-key" type="password" autocomplete="current-password" required minlength="16">
+        <button class="primary" type="submit">Войти</button>
+      </form>
+    </section>
+    <div id="app" hidden>
+      <section class="panel">
+        <h1>Состояние</h1>
+        <dl class="info">
+          <dt>Бот</dt><dd id="bot-status">—</dd>
+          <dt>LLM</dt><dd id="llm-status">—</dd>
+          <dt>Изображения</dt><dd id="image-status">—</dd>
+          <dt>Активные запросы</dt><dd id="active-requests">—</dd>
+        </dl>
+      </section>
+      <section class="panel">
+        <h2>Токен бота</h2>
+        <form id="token-form">
+          <label for="token">Токен от @BotFather <span id="token-current" class="hint"></span></label>
+          <input id="token" type="password" autocomplete="off" required placeholder="123456789:AA…" pattern="\d{5,15}:[A-Za-z0-9_\-]{30,64}">
+          <div class="actions"><button class="primary" type="submit">Проверить и применить</button><button type="button" id="token-delete">Отключить бота</button></div>
+        </form>
+      </section>
+      <section class="panel">
+        <h2>Настройки</h2>
+        <form id="settings-form">
+          <label for="admins">Администраторы: Telegram id через запятую</label>
+          <input id="admins" inputmode="numeric" placeholder="123456789, 987654321">
+          <label for="system_prompt">Системный промпт по умолчанию</label>
+          <textarea id="system_prompt" rows="4" maxlength="4000"></textarea>
+          <div class="grid">
+            <div><label for="max_history_messages">Сообщений истории</label><input id="max_history_messages" type="number" min="0" max="500" required></div>
+            <div><label for="max_context_chars">Символов контекста</label><input id="max_context_chars" type="number" min="1000" max="1000000" required></div>
+            <div><label for="max_prompt_chars">Символов в сообщении</label><input id="max_prompt_chars" type="number" min="100" max="100000" required></div>
+            <div><label for="max_tokens">max_tokens ответа</label><input id="max_tokens" type="number" min="16" max="32768" required></div>
+            <div><label for="temperature">Temperature</label><input id="temperature" type="number" min="0" max="2" step="0.05" required></div>
+            <div><label for="request_timeout">Таймаут, с</label><input id="request_timeout" type="number" min="10" max="3600" required></div>
+            <div><label for="rate_limit_per_min">Запросов в минуту</label><input id="rate_limit_per_min" type="number" min="1" max="600" required></div>
+          </div>
+          <label for="llm_backends">LLM backends (qwen, gemma): имя=URL, хост URL = имя; используется первый запущенный</label>
+          <textarea id="llm_backends" rows="3" spellcheck="false"></textarea>
+          <label for="image_backends">Генераторы изображений (sdxl, qwen-image): хост URL = имя</label>
+          <textarea id="image_backends" rows="2" spellcheck="false"></textarea>
+          <button class="primary" type="submit">Сохранить</button>
+        </form>
+      </section>
+      <section class="panel wide">
+        <div class="heading"><h2>Пользователи</h2><button type="button" id="refresh">Обновить</button></div>
+        <div class="table"><table><thead><tr><th>Telegram id</th><th>Имя</th><th>Статус</th><th>Сессий</th><th></th></tr></thead><tbody id="users"></tbody></table></div>
+      </section>
+    </div>
+    <p id="message" role="alert" hidden></p>
+  </main>
+</body>
+</html>

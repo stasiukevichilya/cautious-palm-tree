@@ -8,6 +8,10 @@ scrape_configs:
     static_configs:
       - targets: ['sdxl:8080']
 
+  - job_name: tgbot
+    static_configs:
+      - targets: ['tgbot:8080']
+
   - job_name: qwen
     static_configs:
       - targets: ['qwen:8080']

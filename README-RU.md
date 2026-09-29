@@ -4,6 +4,12 @@ Qwen-Image 2.1: полный генератор с Heretic GGUF-энкодеро
 ComfyUI и HTTP API. [Подготовка и запуск](QWEN-IMAGE-RU.md): `make qwen-image`,
 интерфейс http://127.0.0.1:8083. Вариант с DiT unsloth Q8_0: `make qwen-image-unsloth`.
 
+Qwen-Image 2.1 Uncensored: отдельный сервис на одной GPU, недоступный боту:
+[QWEN-IMAGE-UC-RU.md](QWEN-IMAGE-UC-RU.md), `make qwen-image-uc`, интерфейс http://127.0.0.1:8085.
+
+Telegram-бот для запущенной LLM и генераторов изображений: [TGBOT-RU.md](TGBOT-RU.md),
+`make tgbot`, настройки http://127.0.0.1:8084.
+
 SDXL Base 1.0: отдельный профиль генерации изображений с HTTP API и веб-интерфейсом.
 Подготовка, режимы одной/двух GPU и проверки: [SDXL-RU.md](SDXL-RU.md).
 Запуск после подготовки: `make sdxl`, интерфейс http://127.0.0.1:8082.

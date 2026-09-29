@@ -34,6 +34,58 @@ services:
       timeout: 6s
       start_period: 120s
       retries: 4
+  qwen-image-uc:
+    <<: *common
+    profiles: ["qwen-image-uc"]
+    build:
+      context: ./qwen-image-uc
+      additional_contexts:
+        qwenimage: ./qwen-image
+    image: local/ml-qwen-image-uc:1
+    init: true
+    user: "${QWEN_IMAGE_UID:-${SDXL_UID:-1000}}:${QWEN_IMAGE_GID:-${SDXL_GID:-1000}}"
+    stop_grace_period: 75s
+    environment:
+      CUDA_VISIBLE_DEVICES: ${QWEN_IMAGE_UC_GPU:-${QWEN_IMAGE_GPU0:-${SDXL_GPU0:-0}}}
+      NVIDIA_VISIBLE_DEVICES: ${QWEN_IMAGE_UC_GPU:-${QWEN_IMAGE_GPU0:-${SDXL_GPU0:-0}}}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      QWEN_IMAGE_UC_VRAM_RESERVE_GIB: ${QWEN_IMAGE_UC_VRAM_RESERVE_GIB:-1.5}
+    gpus: all
+    # Own network only: other services (the Telegram bot included) cannot resolve or reach it.
+    networks: [qwen-image-uc]
+    volumes:
+      - ./models/qwen-image-2.1-uc:/models:ro
+      - ./outputs/qwen-image-uc:/data
+    ports:
+      - "127.0.0.1:8085:8188"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8188/system_stats', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      start_period: 120s
+      retries: 4
+  tgbot:
+    <<: *common
+    build:
+      context: ./tgbot
+    image: local/ml-tgbot:1
+    init: true
+    user: "${TGBOT_UID:-${SDXL_UID:-1000}}:${TGBOT_GID:-${SDXL_GID:-1000}}"
+    environment:
+      TGBOT_ADMIN_KEY: ${TGBOT_ADMIN_KEY:-}
+      TGBOT_TOKEN: ${TGBOT_TOKEN:-}
+      TGBOT_ADMINS: ${TGBOT_ADMINS:-}
+    volumes:
+      - ./outputs/tgbot:/data
+      - ./qwen-image/workflows:/workflows:ro
+    ports:
+      - "127.0.0.1:8084:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      start_period: 30s
+      retries: 4
   sdxl:
     <<: *common
     profiles: ["sdxl"]
@@ -328,6 +380,9 @@ services:
       options:
         max-size: '10m'
         max-file: '3'
+networks:
+  default:
+  qwen-image-uc:
 volumes:
   dsh-data:
   prometheus-data:

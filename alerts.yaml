@@ -2,7 +2,7 @@ groups:
   - name: local-inference
     rules:
       - alert: ScrapeTargetDown
-        expr: up{job!~"llama|qwen|gemma|sdxl"} == 0
+        expr: up{job!~"llama|qwen|gemma|sdxl|tgbot"} == 0
         for: 3m
         labels:
           severity: warning
@@ -29,3 +29,10 @@ groups:
           severity: warning
         annotations:
           summary: SDXL jobs have been queued for over 10 minutes
+      - alert: TgbotNotPolling
+        expr: (tgbot_polling == 0) and on(job, instance) (up{job="tgbot"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Telegram bot is running but not polling (no or invalid token)

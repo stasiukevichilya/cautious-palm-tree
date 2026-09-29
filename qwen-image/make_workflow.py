@@ -3,20 +3,23 @@ import json
 from pathlib import Path
 
 
-def build(graph):
-    layout = {
-        "1": ([], ["MODEL"], ["model_name"], [0, 0]),
-        "2": ([], ["CLIP"], ["encoder_name"], [0, 200]),
-        "3": ([], ["VAE"], ["vae_name"], [0, 400]),
-        "4": (["clip", "vae"], ["CONDITIONING", "CONDITIONING", "LATENT"],
-              ["prompt", "negative_prompt", "resolution"], [370, 0]),
-        "5": (["model"], ["MODEL"], ["device", "dtype"], [370, 470]),
-        "6": (["model", "positive", "negative", "latent_image"], ["LATENT"],
-              ["seed", "@randomize", "steps", "cfg", "sampler_name", "scheduler", "denoise"], [780, 0]),
-        "7": (["samples", "vae"], ["IMAGE"],
-              ["tile_size", "overlap", "temporal_size", "temporal_overlap"], [1140, 0]),
-        "8": (["images"], [], ["filename_prefix"], [1480, 0]),
-    }
+LAYOUT = {
+    "1": ([], ["MODEL"], ["model_name"], [0, 0]),
+    "2": ([], ["CLIP"], ["encoder_name"], [0, 200]),
+    "3": ([], ["VAE"], ["vae_name"], [0, 400]),
+    "4": (["clip", "vae"], ["CONDITIONING", "CONDITIONING", "LATENT"],
+          ["prompt", "negative_prompt", "resolution"], [370, 0]),
+    "5": (["model"], ["MODEL"], ["device", "dtype"], [370, 470]),
+    "6": (["model", "positive", "negative", "latent_image"], ["LATENT"],
+          ["seed", "@randomize", "steps", "cfg", "sampler_name", "scheduler", "denoise"], [780, 0]),
+    "7": (["samples", "vae"], ["IMAGE"],
+          ["tile_size", "overlap", "temporal_size", "temporal_overlap"], [1140, 0]),
+    "8": (["images"], [], ["filename_prefix"], [1480, 0]),
+}
+
+
+def build(graph, layout=LAYOUT):
+    """layout: node id -> (linked inputs, output types, widget names, position); "@x" is a literal widget value."""
     nodes, links = [], []
     for key, (inputs, outputs, widgets, pos) in layout.items():
         spec = graph[key]
@@ -36,7 +39,7 @@ def build(graph):
     by_id = {node["id"]: node for node in nodes}
     for link_id, source, slot, *_ in links:
         by_id[source]["outputs"][slot]["links"].append(link_id)
-    return {"version": 0.4, "last_node_id": 8, "last_link_id": len(links),
+    return {"version": 0.4, "last_node_id": max(map(int, layout)), "last_link_id": len(links),
             "nodes": nodes, "links": links, "groups": [], "config": {}, "extra": {}}
 
 

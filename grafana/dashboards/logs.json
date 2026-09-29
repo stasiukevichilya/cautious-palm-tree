@@ -68,15 +68,25 @@
         "name": "model",
         "label": "Модель / job",
         "type": "custom",
-        "query": "qwen,gemma,sdxl,qwen-image",
+        "query": "qwen,gemma,sdxl,qwen-image,qwen-image-uc,tgbot",
         "multi": true,
         "includeAll": true,
-        "allValue": "qwen|gemma|sdxl|qwen-image",
+        "allValue": "qwen|gemma|sdxl|qwen-image|qwen-image-uc|tgbot",
         "current": {
           "text": "All",
           "value": "$__all"
         },
         "options": [
+          {
+            "text": "tgbot",
+            "value": "tgbot",
+            "selected": false
+          },
+          {
+            "text": "qwen-image-uc",
+            "value": "qwen-image-uc",
+            "selected": false
+          },
           {
             "text": "qwen-image",
             "value": "qwen-image",

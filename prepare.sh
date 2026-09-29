@@ -33,6 +33,7 @@ pin_image TEMPO_IMAGE grafana/tempo:2.9.0
 pin_image GRAFANA_IMAGE grafana/grafana:latest
 pin_image SOCAT_IMAGE alpine/socat:latest
 printf 'GRAFANA_PASSWORD=%s\n' "$(python3 -c 'import secrets; print(secrets.token_hex(24))')" >> "$tmp"
+printf 'TGBOT_ADMIN_KEY=%s\n' "$(python3 -c 'import secrets; print(secrets.token_hex(24))')" >> "$tmp"
 cat >> "$tmp" <<'EOF'
 CUDA_VISIBLE_DEVICES=0,1
 QWEN_TENSOR_SPLIT=0.57,0.43

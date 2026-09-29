@@ -1,0 +1,11 @@
+{
+  "1": {"class_type": "QwenImageUCDiTGPU", "inputs": {"model_name": "qwen-image-2.1-UC-Q4_K_M.gguf"}},
+  "2": {"class_type": "QwenImageUCEncoderCPU", "inputs": {"encoder_name": "qwen3vl_8b_int8_convrot.safetensors"}},
+  "3": {"class_type": "QwenImageUCVAEGPU", "inputs": {"vae_name": "qwen_image_2.1_vae_bf16.safetensors"}},
+  "4": {"class_type": "TextEncodeQwenImage21", "inputs": {"clip": ["2", 0], "prompt": "A red ceramic teapot on a white table, studio photography", "negative_prompt": "", "vae": ["3", 0], "resolution": 1024}},
+  "5": {"class_type": "QwenImage21Cache", "inputs": {"model": ["1", 0], "device": "gpu", "dtype": "default"}},
+  "9": {"class_type": "EmptyLatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+  "6": {"class_type": "KSampler", "inputs": {"model": ["5", 0], "positive": ["4", 0], "negative": ["4", 1], "latent_image": ["9", 0], "seed": 42, "steps": 25, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+  "7": {"class_type": "VAEDecode", "inputs": {"samples": ["6", 0], "vae": ["3", 0]}},
+  "8": {"class_type": "SaveImage", "inputs": {"images": ["7", 0], "filename_prefix": "qwen-image21-uc"}}
+}
