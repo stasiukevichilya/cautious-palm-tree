@@ -12,11 +12,13 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
 from bot import Runner
-from chat import Metrics, Service
+from chat import Metrics, Reply, Service
 from images import Images
 from llm import LLM
+from market import Market
 from settings import ALLOWED_BACKENDS, Settings, backend_error, mask_token
 from store import NotFound, Store
+from torrents import Torrents
 
 TOKEN_PATTERN = r"^\d{5,15}:[A-Za-z0-9_-]{30,64}$"
 
@@ -49,6 +51,19 @@ class TokenUpdate(BaseModel):
     token: str = Field(pattern=TOKEN_PATTERN)
 
 
+class NotifyIn(BaseModel):
+    """Plain-text push to all admins, used by other stack services (e.g. the scraper)."""
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(min_length=1, max_length=8000)
+
+
+class NotifyUserIn(BaseModel):
+    """Plain-text push to one user's chat; the user must have access to the bot."""
+    model_config = ConfigDict(extra="forbid")
+    tg_id: int = Field(gt=0)
+    text: str = Field(min_length=1, max_length=8000)
+
+
 class TokenFilter(logging.Filter):
     """Last line of defence: never let a bot token reach the logs."""
 
@@ -68,7 +83,10 @@ def create_app(settings=None, llm=None, images=None, runner_factory=Runner):
     settings = settings or Settings.from_env()
     store = Store(settings.db_path)
     metrics = Metrics()
-    service = Service(store, llm or LLM(), images or Images(settings.workflows_path), metrics)
+    torrents = Torrents(settings.torrent_url, settings.admin_key) if settings.torrent_url else None
+    market = Market(settings.scraper_url, settings.admin_key) if settings.scraper_url else None
+    service = Service(store, llm or LLM(), images or Images(settings.workflows_path), metrics,
+                      torrents=torrents, market=market)
     runner = runner_factory(service, metrics)
     token_filter = TokenFilter()
     for handler in logging.getLogger().handlers:
@@ -85,6 +103,10 @@ def create_app(settings=None, llm=None, images=None, runner_factory=Runner):
             yield
         finally:
             await runner.stop()
+            if torrents:
+                await torrents.close()
+            if market:
+                await market.close()
             await store.close()
 
     app = FastAPI(title="Local Telegram bot", lifespan=lifespan)
@@ -167,6 +189,28 @@ def create_app(settings=None, llm=None, images=None, runner_factory=Runner):
             return await service.set_access(tg_id, "allowed" if action == "allow" else "blocked")
         except NotFound as error:
             raise HTTPException(404, "User has not sent /start") from error
+
+    @app.post("/api/notify", dependencies=[Depends(authorized)])
+    async def notify(update: NotifyIn):
+        """Push a plain-text message to all admins (Bearer TGBOT_ADMIN_KEY)."""
+        if not (await store.settings())["admins"]:
+            raise HTTPException(409, "No administrators configured")
+        if not service.notify:
+            raise HTTPException(503, "Bot is not polling")
+        await service.to_admins(Reply(update.text))
+        return {"ok": True}
+
+    @app.post("/api/notify-user", dependencies=[Depends(authorized)])
+    async def notify_user(update: NotifyUserIn):
+        """Push a plain-text message to one user (Bearer TGBOT_ADMIN_KEY)."""
+        allowed = update.tg_id in (await store.settings())["admins"] or (
+            (record := await store.user(update.tg_id)) and record["status"] == "allowed")
+        if not allowed:
+            raise HTTPException(409, f"User {update.tg_id} has no access to the bot")
+        if not service.notify:
+            raise HTTPException(503, "Bot is not polling")
+        await service.notify(update.tg_id, Reply(update.text))
+        return {"ok": True}
 
     app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="ui")
     return app

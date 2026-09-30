@@ -6,18 +6,24 @@ HTML (render.py); while it streams it is shown as plain text, since half-written
 import asyncio
 import collections
 import logging
+import re
+import secrets
 import time
 from dataclasses import dataclass, field
 
+import httpx
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
 from llm import Unavailable
 from render import render
 from store import NotFound
+from market import Market
+from torrents import Duplicate, InvalidMagnet, NotFound as TorrentNotFound, Timeout, TorrentError, human_size, magnet_hash
 
 log = logging.getLogger("tgbot")
 EDIT_INTERVAL = 1.5
 IMAGE_PROMPT_LIMIT = 2000
+MAGNET_TTL = 900  # seconds a pending magnet waits for the confirm button
 
 HELP = """Команды:
 /new [название] — новая сессия
@@ -32,17 +38,33 @@ HELP = """Команды:
 /cancel — прервать текущий запрос
 /help — эта справка
 
+Мониторинг рынка БУ:
+/query <запрос> — следить за новыми объявлениями Kufar по запросу (например: /query rtx 5090)
+/queries — мои поисковые запросы
+/delquery <id> — убрать запрос
+/watch <ссылка на товар> — следить за ценой конкретного товара (например: /watch https://www.kufar.by/item/123)
+/items — товары, за которыми я слежу
+/unitem <id> — убрать товар из отслеживания
+
+Уведомления о новых объявлениях и изменениях цен приходят только вам, по вашим запросам.
+
 Любой другой текст отправляется в LLM в активной сессии."""
 
 ADMIN_HELP = """
 Администратор:
 /users — пользователи и заявки
 /allow <tg_id> — открыть доступ
-/block <tg_id> — закрыть доступ"""
+/block <tg_id> — закрыть доступ
+/magnet <magnet-ссылка> — скачать торрент (покажет имя и размер, кнопка подтверждения)
+/torrents — текущие загрузки
+/torrent-del <hash> — убрать загрузку из очереди"""
 
 COMMANDS = [("new", "Новая сессия"), ("sessions", "Мои сессии"), ("clear", "Очистить историю"),
             ("system", "Системный промпт сессии"), ("model", "Доступные модели"),
-            ("image", "Сгенерировать изображение"), ("cancel", "Прервать запрос"), ("help", "Справка")]
+            ("image", "Сгенерировать изображение"), ("cancel", "Прервать запрос"),
+            ("query", "Следить за поисковым запросом"), ("queries", "Мои поисковые запросы"),
+            ("watch", "Следить за ценой товара"), ("items", "Товары на отслеживании"),
+            ("help", "Справка")]
 
 
 @dataclass
@@ -78,13 +100,16 @@ class Metrics:
 
 
 class Service:
-    def __init__(self, store, llm, images, metrics=None):
+    def __init__(self, store, llm, images, metrics=None, torrents=None, market=None):
         self.store, self.llm, self.images = store, llm, images
+        self.torrents = torrents  # torrents.Torrents client, or None when TGBOT_TORRENT_URL is unset
+        self.market = market  # market.Market client, or None when TGBOT_SCRAPER_URL is unset
         self.metrics = metrics or Metrics()
         self.locks = {"llm": asyncio.Semaphore(1), "image": asyncio.Semaphore(1)}
         self.waiting = {"llm": 0, "image": 0}
         self.tasks = {}
         self.recent = collections.defaultdict(collections.deque)
+        self.pending_magnets = {}  # info_hash -> {magnet, name, size, num_files, files, expires}
         self.notify = None  # async (chat_id, Reply) -> None, set by the Telegram adapter
 
     # access
@@ -222,6 +247,209 @@ class Service:
                 lines.append(f"{kind}: {error}")
         return Reply("\n".join(lines))
 
+    # torrents (admin only)
+    def _magnet_text(self, meta):
+        files = meta.get("files", [])
+        lines = [f"Название: {meta.get('name') or '—'}",
+                 f"Размер: {human_size(meta.get('size', 0))}",
+                 f"Файлов: {meta.get('num_files', 0)}"]
+        if files:
+            lines.append("")
+            lines.extend(f"· {path} — {human_size(size)}" for path, size in files[:10])
+            if meta.get("num_files", 0) > 10:
+                lines.append(f"… и ещё {meta['num_files'] - 10}")
+        lines += ["", "Скачать?"]
+        return "\n".join(lines)
+
+    def _expire_magnets(self):
+        now = time.monotonic()
+        for token in [t for t, p in self.pending_magnets.items() if p["expires"] < now]:
+            del self.pending_magnets[token]
+
+    async def magnet(self, user, argument, out):
+        if not self.torrents:
+            return await out.send(Reply("Сервис торрентов не настроен (TGBOT_TORRENT_URL)."))
+        self._expire_magnets()
+        magnet = argument.strip()
+        key = magnet_hash(magnet)
+        if key is None:
+            return await out.send(Reply("Это не magnet-ссылка. Пример: magnet:?xt=urn:btih:…"))
+        if any(p["key"] == key and p["expires"] >= time.monotonic() for p in self.pending_magnets.values()):
+            return await out.send(Reply("Эта ссылка уже ожидает подтверждения — нажмите кнопку в прошлом сообщении."))
+        handle = await out.send(Reply("Получаю метаданные…"))
+        try:
+            meta = await self.torrents.metadata(magnet)
+        except InvalidMagnet as error:
+            return await out.edit(handle, f"⚠️ {error}")
+        except Timeout as error:
+            return await out.edit(handle, f"⚠️ {error}")
+        except TorrentError as error:
+            return await out.edit(handle, f"⚠️ {error}")
+        except httpx.HTTPError:
+            return await out.edit(handle, "⚠️ Сервис торрентов недоступен (make logs-torrent).")
+        token = secrets.token_hex(3)
+        self.pending_magnets[token] = {"key": key, "magnet": magnet, "name": meta.get("name", ""),
+                                       "size": meta.get("size", 0), "num_files": meta.get("num_files", 0),
+                                       "files": meta.get("files", []),
+                                       "expires": time.monotonic() + MAGNET_TTL}
+        return await out.edit(handle, self._magnet_text(meta),
+                              buttons=[[("Скачать", f"magnet-yes:{token}"), ("Отмена", f"magnet-no:{token}")]])
+
+    async def magnet_confirm(self, token):
+        pending = self.pending_magnets.pop(token, None)
+        if not pending or pending["expires"] < time.monotonic():
+            return Reply("Запрос устарел. Отправьте /magnet заново.")
+        try:
+            await self.torrents.start(pending["magnet"])
+        except Duplicate as error:
+            return Reply(f"⚠️ {error}")
+        except Timeout as error:
+            return Reply(f"⚠️ {error}")
+        except TorrentError as error:
+            return Reply(f"⚠️ {error}")
+        except httpx.HTTPError:
+            return Reply("⚠️ Сервис торрентов недоступен (make logs-torrent).")
+        return Reply(f"⬇️ Скачивание «{pending['name']}» запущено. Прогресс: /torrents")
+
+    async def magnet_cancel(self, token):
+        return Reply("Отменено.") if self.pending_magnets.pop(token, None) else Reply("Запрос устарел.")
+
+    async def torrent_list(self, user):
+        if not self.torrents:
+            return Reply("Сервис торрентов не настроен (TGBOT_TORRENT_URL).")
+        try:
+            rows = await self.torrents.list()
+        except httpx.HTTPError:
+            return Reply("⚠️ Сервис торрентов недоступен (make logs-torrent).")
+        except TorrentError as error:
+            return Reply(f"⚠️ {error}")
+        if not rows:
+            return Reply("Загрузок нет.")
+        marks = {"downloading": "⬇", "seeding": "↥", "metadata": "…", "failed": "⚠"}
+        lines = []
+        for row in rows:
+            mark = marks.get(row["state"], "?")
+            progress = f" {row['progress'] * 100:.0f}%" if row["state"] == "downloading" else ""
+            lines.append(f"{mark} {row['name'] or row['info_hash'][:12]} — {row['state']}{progress}")
+        return Reply("\n".join(lines))
+
+    async def torrent_delete(self, user, argument):
+        if not self.torrents:
+            return Reply("Сервис торрентов не настроен (TGBOT_TORRENT_URL).")
+        key = argument.strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{40,64}", key):
+            return Reply("Укажите hash из /torrents.")
+        try:
+            await self.torrents.remove(key)
+        except TorrentNotFound:
+            return Reply("Загрузка не найдена. Список: /torrents")
+        except httpx.HTTPError:
+            return Reply("⚠️ Сервис торрентов недоступен (make logs-torrent).")
+        except TorrentError as error:
+            return Reply(f"⚠️ {error}")
+        return Reply(f"Загрузка {key[:12]}… убрана из очереди.")
+
+    # market monitoring (per user)
+    async def market_query(self, user, argument):
+        if not self.market:
+            return Reply("Мониторинг рынка не настроен (TGBOT_SCRAPER_URL).")
+        query = argument.strip()
+        if not 1 <= len(query) <= 60:
+            return Reply("Запрос от 1 до 60 символов. Пример: /query rtx 5090")
+        try:
+            existing = await self.market.find_watch("kufar", f"/l?query={query.replace(' ', '+')}&sort=lst.d")
+            if existing:
+                if existing.get("owner") == user.id:
+                    return Reply(f"Вы уже следите за «{query}» (id {existing['id']}). Список: /queries")
+                await self.market.subscribe(existing["id"], user.id)
+                return Reply(f"Такой запрос уже есть (id {existing['id']}) — я подписал вас на него. "
+                             "Новые объявления придут только вам и владельцу.")
+            watch = await self.market.create_watch(Market.query_watch(query, user.id))
+            return Reply(f"Слежу за новыми объявлениями «{query}» (id {watch['id']}). "
+                         "Уведомления — только вам. Список: /queries")
+        except httpx.HTTPError:
+            return Reply("⚠️ Скрейпер недоступен (make logs-scraper).")
+        except httpx.HTTPStatusError as error:
+            return Reply(f"⚠️ {error.response.status_code}: {error.response.text[:200]}")
+
+    async def market_queries(self, user):
+        if not self.market:
+            return Reply("Мониторинг рынка не настроен (TGBOT_SCRAPER_URL).")
+        try:
+            watches = await self.market.my_watches(user.id)
+        except httpx.HTTPError:
+            return Reply("⚠️ Скрейпер недоступен (make logs-scraper).")
+        if not watches:
+            return Reply("Запросов нет. Добавьте: /query rtx 5090")
+        lines = [f"Ваши поисковые запросы (удалить: /delquery <id>):"]
+        for watch in watches:
+            state = "активен" if watch["active"] else "выключен"
+            lines.append(f"{watch['id']}. {watch['label']} — {state}, {watch['listings']} объявлений")
+        return Reply("\n".join(lines))
+
+    async def market_delquery(self, user, argument):
+        if not self.market:
+            return Reply("Мониторинг рынка не настроен (TGBOT_SCRAPER_URL).")
+        try:
+            watch_id = int(argument.strip())
+        except ValueError:
+            return Reply("Укажите id из /queries.")
+        try:
+            watches = await self.market.my_watches(user.id)
+            watch = next((w for w in watches if w["id"] == watch_id), None)
+            if watch is None:
+                return Reply(f"Запрос {watch_id} не найден. Список: /queries")
+            await self.market.delete_watch(watch_id)
+        except httpx.HTTPError:
+            return Reply("⚠️ Скрейпер недоступен (make logs-scraper).")
+        return Reply(f"Запрос {watch_id} удалён.")
+
+    async def market_watch(self, user, argument):
+        if not self.market:
+            return Reply("Мониторинг рынка не настроен (TGBOT_SCRAPER_URL).")
+        url = argument.strip()
+        if not re.fullmatch(r"https://www\.kufar\.by/item/\d+([?/].*)?", url):
+            return Reply("Нужна ссылка на товар Kufar: https://www.kufar.by/item/…")
+        try:
+            item = await self.market.add_item(user.id, url)
+        except httpx.HTTPError:
+            return Reply("⚠️ Скрейпер недоступен (make logs-scraper).")
+        except httpx.HTTPStatusError as error:
+            return Reply(f"⚠️ Не удалось открыть объявление ({error.response.status_code}). "
+                         "Возможно, его удалили.")
+        return Reply(f"Слежу за ценой «{item['title']}» (id {item['id']}, сейчас {item['price']} {item['currency']}). "
+                     "Сообщу при любом изменении цены. Список: /items")
+
+    async def market_items(self, user):
+        if not self.market:
+            return Reply("Мониторинг рынка не настроен (TGBOT_SCRAPER_URL).")
+        try:
+            items = await self.market.my_items(user.id)
+        except httpx.HTTPError:
+            return Reply("⚠️ Скрейпер недоступен (make logs-scraper).")
+        if not items:
+            return Reply("Товаров нет. Добавьте: /watch <ссылка на Kufar>")
+        lines = ["Ваши товары (убрать: /unitem <id>):"]
+        for item in items:
+            lines.append(f"{item['id']}. {item['title']} — {item['price']} {item['currency']}")
+            lines.append(f"   {item['url']}")
+        return Reply("\n".join(lines))
+
+    async def market_unitem(self, user, argument):
+        if not self.market:
+            return Reply("Мониторинг рынка не настроен (TGBOT_SCRAPER_URL).")
+        try:
+            item_id = int(argument.strip())
+        except ValueError:
+            return Reply("Укажите id из /items.")
+        try:
+            await self.market.delete_item(item_id, user.id)
+        except httpx.HTTPStatusError:
+            return Reply(f"Товар {item_id} не найден. Список: /items")
+        except httpx.HTTPError:
+            return Reply("⚠️ Скрейпер недоступен (make logs-scraper).")
+        return Reply(f"Товар {item_id} убран из отслеживания.")
+
     # proxying
     async def admit(self, user, settings):
         """None and the request is registered as the user's active one, or a refusal Reply.
@@ -344,7 +572,7 @@ class Service:
         await self.run(user, "image", work, out)
 
     async def callback(self, user, data):
-        """Inline buttons: sw:/del: for own sessions, allow:/block: for admins."""
+        """Inline buttons: sw:/del: for own sessions, allow:/block: and magnet-yes:/magnet-no: for admins."""
         action, _, argument = data.partition(":")
         if action == "sw":
             return await self.switch(user, argument)
@@ -352,4 +580,8 @@ class Service:
             return await self.delete(user, argument)
         if action in ("allow", "block") and await self.role(user) == "admin":
             return await self.admin_access(argument, "allowed" if action == "allow" else "blocked")
+        if action == "magnet-yes" and await self.role(user) == "admin":
+            return await self.magnet_confirm(argument)
+        if action == "magnet-no" and await self.role(user) == "admin":
+            return await self.magnet_cancel(argument)
         return Reply("Действие недоступно.")

@@ -1,4 +1,5 @@
 import asyncio
+import itertools
 import json
 import os
 import tempfile
@@ -15,6 +16,7 @@ from images import Images
 from llm import LLM, Unavailable
 from settings import Settings, mask_token
 from store import NotFound, Store
+from torrents import NotFound as TorrentNotFound, Timeout, magnet_hash
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = Path(os.getenv("TGBOT_WORKFLOWS", ROOT.parent / "qwen-image" / "workflows"))
@@ -51,17 +53,112 @@ class FakeImages:
 
 class FakeOut:
     def __init__(self):
-        self.messages, self.photos = [], []
+        self.messages, self.photos, self.buttons = [], [], {}
 
     async def send(self, reply):
         self.messages.append(reply.text)
+        if reply.buttons:
+            self.buttons[len(self.messages) - 1] = reply.buttons
         return len(self.messages) - 1
 
-    async def edit(self, handle, text, html=False):
+    async def edit(self, handle, text, html=False, buttons=None):
         self.messages[handle] = text
+        self.buttons[handle] = buttons
 
     async def photo(self, png, caption):
         self.photos.append((png, caption))
+
+
+class FakeTorrents:
+    def __init__(self):
+        self.metadata_calls, self.start_calls, self.remove_calls = [], [], []
+        self.meta = {}
+        self.rows = []
+        self.fail = None        # exception raised by metadata() and start()
+        self.remove_fail = None  # exception raised by remove()
+
+    async def metadata(self, magnet):
+        self.metadata_calls.append(magnet)
+        if self.fail:
+            raise self.fail
+        return self.meta
+
+    async def start(self, magnet):
+        self.start_calls.append(magnet)
+        if self.fail:
+            raise self.fail
+        return {"info_hash": magnet_hash(magnet), "state": "downloading"}
+
+    async def list(self):
+        return self.rows
+
+    async def remove(self, key):
+        self.remove_calls.append(key)
+        if self.remove_fail:
+            raise self.remove_fail
+        return {"ok": True}
+
+
+class FakeMarket:
+    def __init__(self):
+        self.watches, self.items = {}, {}
+        self.created, self.deleted_watches, self.subscribed = [], [], []
+        self.deleted_items, self.checked = [], []
+        self.next_id = itertools.count(1)
+        self.fail = None
+
+    async def find_watch(self, source, ref):
+        for watch in self.watches.values():
+            if watch["source"] == source and watch["ref"] == ref:
+                return watch
+        return None
+
+    async def create_watch(self, watch):
+        if self.fail:
+            raise self.fail
+        watch = dict(watch, id=next(self.next_id), active=1, listings=0)
+        self.watches[watch["id"]] = watch
+        self.created.append(watch)
+        return watch
+
+    async def delete_watch(self, watch_id):
+        if self.fail:
+            raise self.fail
+        self.watches.pop(watch_id, None)
+        self.deleted_watches.append(watch_id)
+
+    async def subscribe(self, watch_id, tg_id):
+        self.subscribed.append((watch_id, tg_id))
+
+    async def unsubscribe(self, watch_id, tg_id):
+        pass
+
+    async def my_watches(self, owner):
+        return [w for w in self.watches.values() if w.get("owner") == owner]
+
+    async def add_item(self, owner, url):
+        if self.fail:
+            raise self.fail
+        item = {"id": next(self.next_id), "owner": owner, "url": url, "title": "RTX 5090",
+                "price": 30000.0, "currency": "BYN", "active": True}
+        self.items[item["id"]] = item
+        return item
+
+    async def my_items(self, owner):
+        if self.fail:
+            raise self.fail
+        return [i for i in self.items.values() if i["owner"] == owner]
+
+    async def delete_item(self, item_id, owner):
+        if item_id not in self.items:
+            raise httpx.HTTPStatusError("gone", request=httpx.Request("DELETE", "http://x"),
+                                        response=httpx.Response(404))
+        self.items.pop(item_id)
+        self.deleted_items.append(item_id)
+
+    async def check_item(self, item_id):
+        self.checked.append(item_id)
+        return {"price": 29000.0}
 
 
 class Async(unittest.IsolatedAsyncioTestCase):
@@ -70,7 +167,8 @@ class Async(unittest.IsolatedAsyncioTestCase):
         self.store = Store(Path(self.directory.name) / "bot.db")
         await self.store.open({"admins": [ADMIN.id]})
         self.llm = FakeLLM()
-        self.service = Service(self.store, self.llm, FakeImages())
+        self.torrents = FakeTorrents()
+        self.service = Service(self.store, self.llm, FakeImages(), torrents=self.torrents)
         self.notified = []
 
         async def notify(chat_id, reply):
@@ -264,6 +362,238 @@ class ServiceTests(Async):
         self.assertIn("Использование", out.messages[-1])
 
 
+class MagnetTests(Async):
+    MAGNET = "magnet:?xt=urn:btih:" + "a" * 40
+
+    def configure(self, name="linux-2024.iso", size=5 * 1024 ** 3):
+        self.torrents.meta = {"name": name, "size": size, "num_files": 1, "files": [[name, size]]}
+
+    async def token_of(self, out):
+        return out.buttons[0][0][0][1].partition(":")[2]
+
+    async def test_magnet_not_configured(self):
+        await self.allow(ADMIN)
+        self.service.torrents = None
+        out = FakeOut()
+        await self.service.magnet(ADMIN, self.MAGNET, out)
+        self.assertIn("не настроен", out.messages[-1])
+
+    async def test_magnet_rejects_non_magnet(self):
+        await self.allow(ADMIN)
+        out = FakeOut()
+        await self.service.magnet(ADMIN, "http://x/y.torrent", out)
+        self.assertIn("не magnet-ссылка", out.messages[-1])
+        self.assertEqual(self.torrents.metadata_calls, [])
+
+    async def test_magnet_shows_metadata_and_confirms(self):
+        await self.allow(ADMIN)
+        self.configure()
+        out = FakeOut()
+        await self.service.magnet(ADMIN, self.MAGNET, out)
+        self.assertEqual(len(out.messages), 1)  # the placeholder was edited in place
+        self.assertIn("linux-2024.iso", out.messages[0])
+        self.assertIn("5.0 ГБ", out.messages[0])
+        self.assertIn("Скачать?", out.messages[0])
+        label, data = out.buttons[0][0][0]
+        self.assertEqual(label, "Скачать")
+        reply = await self.service.callback(ADMIN, data)
+        self.assertIn("запущено", reply.text)
+        self.assertEqual(self.torrents.start_calls, [self.MAGNET])
+        self.assertEqual(self.service.pending_magnets, {})
+
+    async def test_magnet_confirm_by_non_admin_denied(self):
+        await self.allow(ADMIN, ALICE)
+        self.configure()
+        out = FakeOut()
+        await self.service.magnet(ADMIN, self.MAGNET, out)
+        token = await self.token_of(out)
+        reply = await self.service.callback(ALICE, f"magnet-yes:{token}")
+        self.assertEqual(reply.text, "Действие недоступно.")
+        self.assertEqual(self.torrents.start_calls, [])
+
+    async def test_magnet_cancel(self):
+        await self.allow(ADMIN)
+        self.configure()
+        out = FakeOut()
+        await self.service.magnet(ADMIN, self.MAGNET, out)
+        token = await self.token_of(out)
+        reply = await self.service.callback(ADMIN, f"magnet-no:{token}")
+        self.assertIn("Отменено", reply.text)
+        self.assertEqual(self.service.pending_magnets, {})
+        self.assertEqual(self.torrents.start_calls, [])
+
+    async def test_magnet_stale_token(self):
+        await self.allow(ADMIN)
+        self.configure()
+        reply = await self.service.callback(ADMIN, "magnet-yes:deadbeef")
+        self.assertIn("устарел", reply.text)
+
+    async def test_magnet_metadata_timeout(self):
+        await self.allow(ADMIN)
+        self.torrents.fail = Timeout("Не удалось получить метаданные (нет сидов).")
+        out = FakeOut()
+        await self.service.magnet(ADMIN, self.MAGNET, out)
+        self.assertIn("⚠️", out.messages[0])
+        self.assertIn("метаданные", out.messages[0])
+
+    async def test_magnet_service_down(self):
+        await self.allow(ADMIN)
+
+        async def broken(magnet):
+            raise httpx.ConnectError("down")
+        self.torrents.metadata = broken
+        out = FakeOut()
+        await self.service.magnet(ADMIN, self.MAGNET, out)
+        self.assertIn("недоступен", out.messages[0])
+
+    async def test_magnet_duplicate_pending(self):
+        await self.allow(ADMIN)
+        self.configure()
+        first, second = FakeOut(), FakeOut()
+        await self.service.magnet(ADMIN, self.MAGNET, first)
+        await self.service.magnet(ADMIN, self.MAGNET, second)
+        self.assertIn("уже ожидает", second.messages[0])
+        self.assertEqual(len(self.service.pending_magnets), 1)
+
+    async def test_torrent_list(self):
+        await self.allow(ADMIN)
+        self.torrents.rows = [
+            {"info_hash": "b" * 40, "name": "a.iso", "state": "downloading", "progress": 0.5, "size": 10},
+            {"info_hash": "c" * 40, "name": "b.zip", "state": "seeding", "progress": 1.0, "size": 10},
+        ]
+        reply = await self.service.torrent_list(ADMIN)
+        self.assertIn("⬇", reply.text)
+        self.assertIn("50%", reply.text)
+        self.assertIn("↥", reply.text)
+
+    async def test_torrent_list_empty_and_down(self):
+        await self.allow(ADMIN)
+        self.assertIn("Загрузок нет", (await self.service.torrent_list(ADMIN)).text)
+        self.service.torrents = None
+        self.assertIn("не настроен", (await self.service.torrent_list(ADMIN)).text)
+
+    async def test_torrent_delete(self):
+        await self.allow(ADMIN)
+        reply = await self.service.torrent_delete(ADMIN, "b" * 40)
+        self.assertIn("убрана", reply.text)
+        self.assertEqual(self.torrents.remove_calls, ["b" * 40])
+        self.assertIn("hash", (await self.service.torrent_delete(ADMIN, "nope")).text)
+        self.torrents.remove_fail = TorrentNotFound("Загрузка не найдена.")
+        self.assertIn("не найдена", (await self.service.torrent_delete(ADMIN, "c" * 40)).text)
+
+
+class MarketTests(Async):
+    async def test_market_not_configured(self):
+        await self.allow(ALICE)
+        self.service.market = None
+        calls = (lambda: self.service.market_query(ALICE, "rtx 5090"),
+                 lambda: self.service.market_queries(ALICE),
+                 lambda: self.service.market_delquery(ALICE, "1"),
+                 lambda: self.service.market_watch(ALICE, "https://www.kufar.by/item/1"),
+                 lambda: self.service.market_items(ALICE),
+                 lambda: self.service.market_unitem(ALICE, "1"))
+        for call in calls:
+            self.assertIn("не настроен", (await call()).text)
+
+    async def test_query_creates_watch_for_owner(self):
+        await self.allow(ALICE)
+        self.service.market = FakeMarket()
+        reply = await self.service.market_query(ALICE, "rtx 5090")
+        self.assertIn("Слежу", reply.text)
+        watch = self.service.market.created[0]
+        self.assertEqual(watch["source"], "kufar")
+        self.assertEqual(watch["ref"], "/l?query=rtx+5090&sort=lst.d")
+        self.assertEqual(watch["owner"], ALICE.id)
+        self.assertEqual(watch["filter"], ["rtx 5090"])
+        self.assertIn("ноутбук", watch["exclude"])
+
+    async def test_query_rejects_empty_and_long(self):
+        await self.allow(ALICE)
+        self.service.market = FakeMarket()
+        self.assertIn("Запрос от 1 до 60", (await self.service.market_query(ALICE, "")).text)
+        self.assertIn("Запрос от 1 до 60", (await self.service.market_query(ALICE, "x" * 61)).text)
+        self.assertEqual(self.service.market.created, [])
+
+    async def test_query_existing_watch_subscribes(self):
+        await self.allow(ALICE)
+        market = FakeMarket()
+        market.watches[7] = {"id": 7, "source": "kufar", "ref": "/l?query=rtx+5090&sort=lst.d",
+                             "label": "Kufar: rtx 5090", "owner": BOB.id, "active": 1, "listings": 3}
+        self.service.market = market
+        reply = await self.service.market_query(ALICE, "rtx 5090")
+        self.assertIn("подписал вас", reply.text)
+        self.assertEqual(market.subscribed, [(7, ALICE.id)])
+        self.assertEqual(market.created, [])
+
+    async def test_query_own_duplicate_is_rejected(self):
+        await self.allow(ALICE)
+        market = FakeMarket()
+        market.watches[7] = {"id": 7, "source": "kufar", "ref": "/l?query=rtx+5090&sort=lst.d",
+                             "label": "Kufar: rtx 5090", "owner": ALICE.id, "active": 1, "listings": 0}
+        self.service.market = market
+        self.assertIn("уже следите", (await self.service.market_query(ALICE, "rtx 5090")).text)
+        self.assertEqual(market.created, [])
+
+    async def test_queries_lists_only_own_watches(self):
+        await self.allow(ALICE)
+        market = FakeMarket()
+        market.watches = {1: {"id": 1, "label": "Kufar: rtx 5090", "owner": ALICE.id, "active": 1, "listings": 4},
+                          2: {"id": 2, "label": "Kufar: rtx 4090", "owner": BOB.id, "active": 0, "listings": 0}}
+        self.service.market = market
+        text = (await self.service.market_queries(ALICE)).text
+        self.assertIn("Kufar: rtx 5090", text)
+        self.assertNotIn("Kufar: rtx 4090", text)
+        bob_text = (await self.service.market_queries(BOB)).text
+        self.assertIn("Kufar: rtx 4090", bob_text)
+        self.assertNotIn("Kufar: rtx 5090", bob_text)
+        self.assertEqual((await self.service.market_queries(User(9))).text,
+                         "Запросов нет. Добавьте: /query rtx 5090")
+
+    async def test_delquery(self):
+        await self.allow(ALICE)
+        market = FakeMarket()
+        market.watches[1] = {"id": 1, "label": "Kufar: rtx 5090", "owner": ALICE.id, "active": 1, "listings": 0}
+        self.service.market = market
+        self.assertIn("удалён", (await self.service.market_delquery(ALICE, "1")).text)
+        self.assertEqual(market.deleted_watches, [1])
+        self.assertIn("не найден", (await self.service.market_delquery(ALICE, "1")).text)
+        self.assertIn("Укажите id", (await self.service.market_delquery(ALICE, "x")).text)
+        # bob cannot delete alice's watch
+        self.assertIn("не найден", (await self.service.market_delquery(BOB, "1")).text)
+
+    async def test_watch_adds_item_and_validates_url(self):
+        await self.allow(ALICE)
+        self.service.market = FakeMarket()
+        for url in ("https://example.com/item/1", "https://www.kufar.by/l?query=rtx", "", "not a url"):
+            self.assertIn("Нужна ссылка", (await self.service.market_watch(ALICE, url)).text)
+        reply = await self.service.market_watch(ALICE, "https://www.kufar.by/item/1085074728")
+        self.assertIn("Слежу за ценой", reply.text)
+        self.assertIn("30000", reply.text)
+        item = list(self.service.market.items.values())[0]
+        self.assertEqual((item["owner"], item["url"]), (ALICE.id, "https://www.kufar.by/item/1085074728"))
+
+    async def test_items_and_unitem(self):
+        await self.allow(ALICE)
+        self.service.market = FakeMarket()
+        await self.service.market_watch(ALICE, "https://www.kufar.by/item/1")
+        item = list(self.service.market.items.values())[0]
+        text = (await self.service.market_items(ALICE)).text
+        self.assertIn("RTX 5090", text)
+        self.assertIn(item["url"], text)
+        self.assertIn("убран", (await self.service.market_unitem(ALICE, str(item["id"]))).text)
+        self.assertEqual(self.service.market.deleted_items, [item["id"]])
+        self.assertIn("не найден", (await self.service.market_unitem(ALICE, str(item["id"]))).text)
+        self.assertIn("Укажите id", (await self.service.market_unitem(ALICE, "x")).text)
+
+    async def test_market_down(self):
+        await self.allow(ALICE)
+        market = FakeMarket()
+        market.fail = httpx.ConnectError("down")
+        self.service.market = market
+        self.assertIn("недоступен", (await self.service.market_query(ALICE, "rtx")).text)
+        self.assertIn("недоступен", (await self.service.market_items(ALICE)).text)
+
+
 class BackendTests(unittest.IsolatedAsyncioTestCase):
     async def test_llm_picks_running_backend_and_streams(self):
         def handler(request):
@@ -434,6 +764,34 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(status["backends"]["llm"], "qwen")
         self.assertTrue(status["bot"]["polling"])
         self.assertIn(b"tgbot_requests_total", self.client.get("/metrics").content)
+
+    def test_notify_user(self):
+        store = self.app.state.store
+        self.client.portal.call(store.register, 99, "nobody", "Nobody")
+        body = {"text": "hi"}
+        self.assertEqual(self.client.post("/api/notify-user", headers=self.auth,
+                                          json={**body, "tg_id": 12345}).status_code, 409)  # unknown
+        self.assertEqual(self.client.post("/api/notify-user", headers=self.auth,
+                                          json={**body, "tg_id": 99}).status_code, 409)  # pending
+        self.client.post("/api/users/99/allow", headers=self.auth)
+        self.assertEqual(self.client.post("/api/notify-user", headers=self.auth,
+                                          json={**body, "tg_id": 99}).status_code, 503)  # not polling
+        sent = []
+
+        async def notify(chat_id, reply):
+            sent.append((chat_id, reply.text))
+
+        def install(service, fn):
+            service.notify = fn
+
+        self.client.portal.call(install, self.app.state.service, notify)
+        self.assertEqual(self.client.post("/api/notify-user", headers=self.auth,
+                                          json={**body, "tg_id": 99}).status_code, 200)
+        self.assertEqual(sent, [(99, "hi")])
+        # an admin with no /start record can still be messaged
+        self.assertEqual(self.client.post("/api/notify-user", headers=self.auth,
+                                          json={**body, "tg_id": 1}).status_code, 200)
+        self.assertEqual(sent, [(99, "hi"), (1, "hi")])
 
 
 class SettingsTests(unittest.TestCase):

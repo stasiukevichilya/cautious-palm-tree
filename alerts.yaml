@@ -2,12 +2,19 @@ groups:
   - name: local-inference
     rules:
       - alert: ScrapeTargetDown
-        expr: up{job!~"llama|qwen|gemma|sdxl|tgbot|qwen-image|qwen-image-uc"} == 0
+        expr: up{job!~"llama|qwen|gemma|sdxl|tgbot|qwen-image|qwen-image-uc|torrent"} == 0
         for: 3m
         labels:
           severity: warning
         annotations:
           summary: 'Metrics endpoint unavailable: {{ $labels.job }}'
+      - alert: TorrentDestinationLow
+        expr: torrent_destination_free_bytes / torrent_destination_total_bytes < 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Less than 5% of free space left in the torrent destination'
       - alert: LlamaQueueWaiting
         expr: llamacpp:requests_deferred > 0
         for: 10m

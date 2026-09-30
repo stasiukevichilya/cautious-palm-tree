@@ -1,0 +1,33 @@
+[
+  {
+    "source": "kufar",
+    "ref": "/l?query=rtx+3090&sort=lst.d",
+    "label": "Kufar: RTX 3090 (поиск по РБ)",
+    "filter": ["3090"],
+    "exclude": ["ноутбук", "куплю", "купить", "компьютер", "пк", "pc", "сборка", "системн", "охлажд", "охлад", "вентилятор", "heatkiller", "waterblock"],
+    "params": {"max_pages": 14}
+  },
+  {
+    "source": "kufar",
+    "ref": "/l?query=rtx+4090&sort=lst.d",
+    "label": "Kufar: RTX 4090 (поиск по РБ)",
+    "filter": ["4090"],
+    "exclude": ["ноутбук", "куплю", "купить", "компьютер", "пк", "pc", "сборка", "системн", "охлажд", "охлад", "вентилятор", "heatkiller", "waterblock"],
+    "params": {"max_pages": 8}
+  },
+  {
+    "source": "kufar",
+    "ref": "/l?query=rtx+5090&sort=lst.d",
+    "label": "Kufar: RTX 5090 (поиск по РБ)",
+    "filter": ["5090"],
+    "exclude": ["ноутбук", "куплю", "купить", "компьютер", "пк", "pc", "сборка", "системн", "охлажд", "охлад", "вентилятор", "heatkiller", "waterblock"],
+    "params": {"max_pages": 5}
+  },
+  {
+    "source": "onliner",
+    "ref": "videocard",
+    "label": "Onliner: видеокарты (частные объявления)",
+    "filter": ["3090", "4090", "5090"],
+    "params": {"max_pages": 20}
+  }
+]

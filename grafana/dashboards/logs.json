@@ -84,6 +84,12 @@
       "type": "link",
       "url": "/d/local-tgbot",
       "keepTime": true
+    },
+    {
+      "title": "Market scraper",
+      "type": "link",
+      "url": "/d/local-scraper",
+      "keepTime": true
     }
   ],
   "templating": {
@@ -92,15 +98,25 @@
         "name": "model",
         "label": "Модель / job",
         "type": "custom",
-        "query": "qwen,gemma,sdxl,qwen-image,qwen-image-uc,tgbot",
+        "query": "qwen,gemma,sdxl,qwen-image,qwen-image-uc,tgbot,scraper,torrent",
         "multi": true,
         "includeAll": true,
-        "allValue": "qwen|gemma|sdxl|qwen-image|qwen-image-uc|tgbot",
+        "allValue": "qwen|gemma|sdxl|qwen-image|qwen-image-uc|tgbot|scraper|torrent",
         "current": {
           "text": "All",
           "value": "$__all"
         },
         "options": [
+          {
+            "text": "torrent",
+            "value": "torrent",
+            "selected": false
+          },
+          {
+            "text": "scraper",
+            "value": "scraper",
+            "selected": false
+          },
           {
             "text": "tgbot",
             "value": "tgbot",

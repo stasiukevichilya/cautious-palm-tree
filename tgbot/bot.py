@@ -31,11 +31,15 @@ async def formatted(call, text, html):
         return await call(plain(text), None)
 
 
-def markup(reply):
-    if not reply.buttons:
+def rows_markup(rows):
+    if not rows:
         return None
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=label, callback_data=data) for label, data in row] for row in reply.buttons])
+        [InlineKeyboardButton(text=label, callback_data=data) for label, data in row] for row in rows])
+
+
+def markup(reply):
+    return rows_markup(reply.buttons)
 
 
 class Out:
@@ -50,10 +54,11 @@ class Out:
                                                link_preview_options=NO_PREVIEW)
         return await formatted(call, reply.text, reply.html)
 
-    async def edit(self, handle, text, html=False):
+    async def edit(self, handle, text, html=False, buttons=None):
         async def call(text, parse_mode):
             await self.bot.edit_message_text(text, chat_id=self.chat_id, message_id=handle.message_id,
-                                             parse_mode=parse_mode, link_preview_options=NO_PREVIEW)
+                                             parse_mode=parse_mode, reply_markup=rows_markup(buttons),
+                                             link_preview_options=NO_PREVIEW)
         try:
             await formatted(call, text, html)
         except TelegramBadRequest as error:
@@ -117,6 +122,19 @@ def make_router(service):
     command("users", lambda user: service.users(), admin=True)
     command("allow", lambda user, arg: service.admin_access(arg, "allowed"), admin=True, with_args=True)
     command("block", lambda user, arg: service.admin_access(arg, "blocked"), admin=True, with_args=True)
+    command("torrents", service.torrent_list, admin=True)
+    command("torrent-del", service.torrent_delete, admin=True, with_args=True)
+    command("query", service.market_query, with_args=True)
+    command("queries", service.market_queries)
+    command("delquery", service.market_delquery, with_args=True)
+    command("watch", service.market_watch, with_args=True)
+    command("items", service.market_items)
+    command("unitem", service.market_unitem, with_args=True)
+
+    @router.message(Command("magnet"))
+    async def magnet(message: Message, command: CommandObject, bot: Bot):
+        if user := await gate(message, admin=True):
+            await service.magnet(user, command.args or "", Out(bot, message.chat.id))
 
     @router.message(Command("image"))
     async def image(message: Message, command: CommandObject, bot: Bot):

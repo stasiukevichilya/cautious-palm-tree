@@ -1000,6 +1000,12 @@
       "type": "link",
       "url": "/d/local-tgbot",
       "keepTime": true
+    },
+    {
+      "title": "Market scraper",
+      "type": "link",
+      "url": "/d/local-scraper",
+      "keepTime": true
     }
   ]
 }

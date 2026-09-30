@@ -12,6 +12,8 @@ QWEN_IMAGE_DIT ?= base
 .PHONY: help infra qwen gemma sdxl sdxl-dual sdxl-build sdxl-download sdxl-test models-stop status logs-qwen logs-gemma logs-sdxl stop down
 .PHONY: qwen-image-uc qwen-image-uc-build qwen-image-uc-download qwen-image-uc-test qwen-image-uc-browser-test logs-qwen-image-uc
 .PHONY: tgbot tgbot-build tgbot-key tgbot-test tgbot-browser-test logs-tgbot
+.PHONY: scraper scraper-build scraper-test logs-scraper
+.PHONY: torrent torrent-build torrent-test logs-torrent
 .PHONY: qwen-image qwen-image-build qwen-image-download qwen-image-download-unsloth qwen-image-unsloth qwen-image-test qwen-image-browser-test logs-qwen-image
 
 help:
@@ -19,6 +21,10 @@ help:
 	@echo "make qwen-image-uc-build / qwen-image-uc-download / qwen-image-uc-test / qwen-image-uc-browser-test"
 	@echo "make tgbot       - Telegram bot for the running LLM / image model, settings UI :8084"
 	@echo "make tgbot-key / tgbot-build / tgbot-test / tgbot-browser-test / logs-tgbot"
+	@echo "make scraper     - мониторинг БУ-объявлений (Kufar, Onliner), алерты в бота, API :8086"
+	@echo "make scraper-build / scraper-test / logs-scraper"
+	@echo "make torrent     - скачивание по magnet из бота (/magnet), API :8087"
+	@echo "make torrent-build / torrent-test / logs-torrent"
 	@echo "make qwen-image  - Qwen-Image 2.1 on two GPUs, API/UI :8083"
 	@echo "make qwen-image-build / qwen-image-download / qwen-image-test / qwen-image-browser-test"
 	@echo "make qwen-image-unsloth - the same with unsloth Q8_0 DiT (make qwen-image-download-unsloth first)"
@@ -131,6 +137,39 @@ tgbot-browser-test:
 
 logs-tgbot:
 	$(COMPOSE) logs --tail=100 -f tgbot
+
+scraper-build:
+	$(COMPOSE) build scraper
+
+# Как и бот, не модель: переключение моделей и models-stop оставляют его работать.
+scraper: infra
+	@grep -q '^TGBOT_ADMIN_KEY=.\{16,\}' .env || { echo "Add TGBOT_ADMIN_KEY to .env: make tgbot-key"; exit 1; }
+	mkdir -p outputs/scraper
+	$(COMPOSE) up -d --no-deps scraper
+	@echo "Scraper API: http://127.0.0.1:8086 (Bearer TGBOT_ADMIN_KEY)"
+
+scraper-test:
+	docker run --rm --network none --tmpfs /tmp local/ml-scraper:1 python -m unittest discover -s tests -v
+
+logs-scraper:
+	$(COMPOSE) logs --tail=100 -f scraper
+
+torrent-build:
+	$(COMPOSE) build torrent
+
+# Как и бот, не модель: переключение моделей и models-stop оставляют его работать.
+torrent: infra
+	@grep -q '^TGBOT_ADMIN_KEY=.\{16,\}' .env || { echo "Add TGBOT_ADMIN_KEY to .env: make tgbot-key"; exit 1; }
+	mkdir -p outputs/torrent
+	$(COMPOSE) up -d --no-deps torrent
+	@echo "Torrent API: http://127.0.0.1:8087 (Bearer TGBOT_ADMIN_KEY); в боте: /magnet <ссылка>"
+
+# Engine tests use a real libtorrent session on loopback, so the container keeps its network.
+torrent-test:
+	docker run --rm --tmpfs /tmp local/ml-torrent:1 python -m unittest discover -s tests -v
+
+logs-torrent:
+	$(COMPOSE) logs --tail=100 -f torrent
 
 qwen-image-build:
 	$(COMPOSE) --profile qwen-image build qwen-image

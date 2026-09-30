@@ -14,7 +14,7 @@ from bot import Runner
 from chat import Metrics, Service
 from llm import LLM
 from store import Store
-from test_bot import FakeImages
+from test_bot import FakeImages, FakeMarket
 
 TOKEN = "123456789:" + "A" * 35
 ADMIN = {"id": 1, "is_bot": False, "first_name": "Admin", "username": "admin"}
@@ -105,7 +105,8 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
         await self.store.open({"admins": [ADMIN["id"]]})
         llm = LLM(httpx.AsyncClient(transport=httpx.MockTransport(openai_stream)))
         metrics = Metrics()
-        self.runner = Runner(Service(self.store, llm, FakeImages(), metrics), metrics,
+        self.market = FakeMarket()
+        self.runner = Runner(Service(self.store, llm, FakeImages(), metrics, market=self.market), metrics,
                              api=TelegramAPIServer.from_base(f"http://127.0.0.1:{port}"))
         await self.runner.replace(TOKEN)
 
@@ -176,6 +177,42 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
         telegram.message(ALICE, "/help")
         await self.until(lambda: any("/cancel" in c.get("text", "") for c in telegram.calls[before:]))
         self.assertFalse([c for c in telegram.calls[before:] if str(c.get("chat_id")) == "-100"])
+
+    async def test_market_commands_are_per_user(self):
+        telegram = self.telegram
+        telegram.message(ALICE, "/start")
+        await self.until(lambda: any("Заявка на доступ" in c.get("text", "") for c in telegram.sent(1, "sendMessage")))
+        telegram.press(ADMIN, "allow:2")
+        await self.until(lambda: any("Доступ открыт" in c.get("text", "") for c in telegram.sent(2)))
+
+        telegram.message(ALICE, "/query rtx 5090")
+        await self.until(lambda: any("Слежу" in c.get("text", "") for c in telegram.sent(2)))
+        self.assertEqual(self.market.created[0]["owner"], ALICE["id"])
+        self.assertEqual(self.market.created[0]["ref"], "/l?query=rtx+5090&sort=lst.d")
+
+        telegram.message(ALICE, "/query rtx 5090")
+        await self.until(lambda: any("уже следите" in c.get("text", "") for c in telegram.sent(2)))
+        self.assertEqual(len(self.market.created), 1)
+
+        telegram.message(ALICE, "/queries")
+        listing = await self.until(lambda: [c for c in telegram.sent(2) if "поисковые запросы" in c.get("text", "")])
+        self.assertIn("Kufar: rtx 5090", listing[-1]["text"])
+
+        # a pending user cannot create watches
+        telegram.message(BOB, "/start")
+        await self.until(lambda: telegram.sent(3))
+        telegram.message(BOB, "/query rtx 5090")
+        await self.until(lambda: len(telegram.sent(3)) == 2)
+        self.assertIn("ожидает одобрения", telegram.sent(3)[1]["text"])
+        self.assertEqual(len(self.market.created), 1)
+
+        # a second user with access subscribes to alice's watch instead of creating a new one
+        telegram.press(ADMIN, "allow:3")
+        await self.until(lambda: any("Доступ открыт" in c.get("text", "") for c in telegram.sent(3)))
+        telegram.message(BOB, "/query rtx 5090")
+        await self.until(lambda: any("подписал вас" in c.get("text", "") for c in telegram.sent(3)))
+        self.assertEqual(self.market.subscribed, [(self.market.created[0]["id"], BOB["id"])])
+        self.assertEqual(len(self.market.created), 1)
 
     async def test_token_replacement_stops_polling(self):
         await self.runner.replace("")

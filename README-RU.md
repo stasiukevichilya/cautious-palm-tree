@@ -10,6 +10,23 @@ Qwen-Image 2.1 Uncensored: отдельный сервис на одной GPU, 
 Telegram-бот для запущенной LLM и генераторов изображений: [TGBOT-RU.md](TGBOT-RU.md),
 `make tgbot`, настройки http://127.0.0.1:8084.
 
+ Мониторинг БУ-объявлений (Kufar, Onliner): новые объявления и падения цен уходят
+администраторам в того же Telegram-бота, раз в день — отчёт о ценах (медиана за
+неделю, объявления дешевле — жирным). У каждого пользователя Telegram-бота могут
+быть свои поисковые запросы (`/query …`) и товары на отслеживании цены по ссылке
+(`/watch https://www.kufar.by/item/…`): уведомления приходят только владельцу.
+`make scraper`, API http://127.0.0.1:8086 (Bearer TGBOT_ADMIN_KEY):
+`POST /api/scrape` — прогон сейчас, `POST /api/report` — отчёт сейчас,
+`GET /api/watches` — что отслеживается, `GET /api/items` — отслеживаемые товары.
+Состав системного отслеживания: `scraper/watch.json` и API; пользовательские
+запросы и товары добавляются через бота и хранятся в базе скрейпера.
+
+Скачивание торрентов по magnet-ссылке из Telegram-бота (только администратор):
+`/magnet <ссылка>` показывает имя и размер, после подтверждения файл скачивается в
+`outputs/torrent`, `/torrents` — текущие загрузки, `/torrent-del <hash>` — убрать.
+`make torrent`, API http://127.0.0.1:8087 (Bearer TGBOT_ADMIN_KEY). Отключается
+`TGBOT_TORRENT_URL=` в .env. Метрики — в dashboard «Torrent downloads» Grafana.
+
 SDXL Base 1.0: отдельный профиль генерации изображений с HTTP API и веб-интерфейсом.
 Подготовка, режимы одной/двух GPU и проверки: [SDXL-RU.md](SDXL-RU.md).
 Запуск после подготовки: `make sdxl`, интерфейс http://127.0.0.1:8082.
@@ -149,9 +166,9 @@ bash ./docker-wsl.sh compose logs --tail=100 dsh
 
 7. Grafana и проверка OpenTelemetry
 
-Откройте http://127.0.0.1:3055, пользователь admin. Пароль — значение GRAFANA_PASSWORD в .env. Источники Prometheus, Tempo и Loki и dashboards LLM (local-qwen), SDXL, Qwen-Image, Qwen-Image UC, Telegram bot и логов provisioned автоматически; между ними есть перекрёстные ссылки.
+Откройте http://127.0.0.1:3055, пользователь admin. Пароль — значение GRAFANA_PASSWORD в .env. Источники Prometheus, Tempo и Loki и dashboards LLM (local-qwen), SDXL, Qwen-Image, Qwen-Image UC, Telegram bot, market scraper, torrent и логов provisioned автоматически; между ними есть перекрёстные ссылки.
 
-Схема: DSH + LoongSuite → OTLP/HTTP → Collector → Tempo (traces), Collector → Prometheus (metrics); llama, sdxl, tgbot, ComfyUI-сервисы (через /local-qwen-image*/metrics) и gpu-exporter → Prometheus; Loki ← Alloy ← docker-логи; Grafana читает все хранилища. Стандартный session-telemetry-otel DSH не заменяет GenAI tracing-плагин.
+Схема: DSH + LoongSuite → OTLP/HTTP → Collector → Tempo (traces), Collector → Prometheus (metrics); llama, sdxl, tgbot, scraper, torrent, ComfyUI-сервисы (через /local-qwen-image*/metrics) и gpu-exporter → Prometheus; Loki ← Alloy ← docker-логи; Grafana читает все хранилища. Стандартный session-telemetry-otel DSH не заменяет GenAI tracing-плагин.
 
 После запроса из DSH подождите 60–90 секунд:
 

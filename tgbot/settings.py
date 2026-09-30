@@ -45,6 +45,8 @@ class Settings:
     initial_admins: tuple = ()
     workflows_path: Path = Path("/workflows")
     start_bot: bool = True
+    torrent_url: str = ""
+    scraper_url: str = "http://scraper:8080"
 
     @classmethod
     def from_env(cls):
@@ -54,6 +56,8 @@ class Settings:
             initial_token=os.getenv("TGBOT_TOKEN", ""),
             initial_admins=tuple(int(x) for x in os.getenv("TGBOT_ADMINS", "").replace(",", " ").split()),
             workflows_path=Path(os.getenv("TGBOT_WORKFLOWS", "/workflows")),
+            torrent_url=os.getenv("TGBOT_TORRENT_URL", ""),
+            scraper_url=os.getenv("TGBOT_SCRAPER_URL", "http://scraper:8080"),
         )
         if len(config.admin_key) < 16:
             raise ValueError("TGBOT_ADMIN_KEY must be set (at least 16 characters); see TGBOT-RU.md")
