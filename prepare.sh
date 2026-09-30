@@ -37,7 +37,7 @@ printf 'TGBOT_ADMIN_KEY=%s\n' "$(python3 -c 'import secrets; print(secrets.token
 cat >> "$tmp" <<'EOF'
 CUDA_VISIBLE_DEVICES=0,1
 QWEN_TENSOR_SPLIT=0.57,0.43
-QWEN_CTX_SIZE=131072
+QWEN_CTX_SIZE=196608
 QWEN_UBATCH_SIZE=128
 QWEN_MODEL_FILE=Qwen3.8-27B-UD-Q4_K_M.gguf
 EOF

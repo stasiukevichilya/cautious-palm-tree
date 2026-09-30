@@ -83,12 +83,12 @@ bash ./docker-wsl.sh compose version
 
 ```bash
 cp .env ".env.backup-$(date +%Y%m%d-%H%M%S)"
-sed -i 's/^QWEN_CTX_SIZE=.*/QWEN_CTX_SIZE=131072/; s/^QWEN_MODEL_FILE=.*/QWEN_MODEL_FILE=Qwen3.8-27B-UD-Q4_K_M.gguf/' .env
+sed -i 's/^QWEN_CTX_SIZE=.*/QWEN_CTX_SIZE=196608/; s/^QWEN_MODEL_FILE=.*/QWEN_MODEL_FILE=Qwen3.8-27B-UD-Q4_K_M.gguf/' .env
 bash download-model.sh
 bash ./docker-wsl.sh compose up -d --force-recreate llama
 ```
 
-Убедитесь, что обе строки есть в .env. В DSH измените Context window существующей модели на 131072, оставьте Max output tokens=8192 и начните новую сессию. prepare.sh повторно запускать не нужно. Старый Q5-файл автоматически не удаляется; для скачивания Q4 требуется еще около 16.5 GB свободного места. Для новой установки используйте команды ниже.
+Убедитесь, что обе строки есть в .env. В DSH измените Context window существующей модели на 196608, оставьте Max output tokens=8192 и начните новую сессию. prepare.sh повторно запускать не нужно. Старый Q5-файл автоматически не удаляется; для скачивания Q4 требуется еще около 16.5 GB свободного места. Для новой установки используйте команды ниже.
 
 
 ```bash

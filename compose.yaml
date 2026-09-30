@@ -283,7 +283,7 @@ services:
       - --tensor-split
       - ${QWEN_TENSOR_SPLIT:-0.57,0.43}
       - --ctx-size
-      - ${QWEN_CTX_SIZE:-200192}
+      - ${QWEN_CTX_SIZE:-196608}
       - --parallel
       - '1'
       - --flash-attn
