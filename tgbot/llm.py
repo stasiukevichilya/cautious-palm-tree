@@ -31,7 +31,7 @@ class LLM:
                 break
         self.cached = (time.monotonic(), dict(backends), found)
         if not found:
-            raise Unavailable("LLM не запущена: выполните make qwen или make gemma")
+            raise Unavailable("LLM не запущена: выполните make qwen")
         return found
 
     async def stream(self, backends, messages, max_tokens, temperature, timeout):

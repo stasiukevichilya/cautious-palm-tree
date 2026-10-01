@@ -95,6 +95,21 @@ class AppTests(unittest.TestCase):
             self.assertEqual(client.post("/api/watches", headers=HEADERS,
                                          json={"source": "nope", "ref": "x"}).status_code, 422)
 
+    def test_find_watch_endpoint(self):
+        with TestClient(self.app) as client:
+            found = client.get("/api/watches/find", headers=HEADERS,
+                               params={"source": "kufar", "ref": "/l/videokarty"})
+            self.assertEqual(found.status_code, 200)
+            body = found.json()
+            self.assertEqual(body["label"], "K")
+            self.assertEqual(body["filter"], ["3090"])
+            self.assertEqual(
+                client.get("/api/watches/find", headers=HEADERS,
+                           params={"source": "kufar", "ref": "/l/none"}).status_code, 404)
+            self.assertEqual(
+                client.get("/api/watches/find", params={"source": "kufar",
+                                                        "ref": "/l/videokarty"}).status_code, 401)
+
     def test_manual_scrape_and_report(self):
         service, sent = self.wire_fakes()
         with TestClient(self.app) as client:

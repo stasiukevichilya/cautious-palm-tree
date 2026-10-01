@@ -8,6 +8,7 @@ from adapters import ADAPTERS
 from adapters.kufar import parse_item
 from config import Watch
 from httpclient import ScrapeError
+from tgbot import Refused
 
 log = logging.getLogger("scraper.service")
 
@@ -15,6 +16,11 @@ log = logging.getLogger("scraper.service")
 SUMMARY_THRESHOLD = 50
 ALERT_MAX_AGE = 7 * 86400
 REPORT_MEDIAN_WINDOW = 7 * 86400
+# An ad counts as "live" in the report if it was seen within this window (a few failed
+# scrapes must not make it vanish); default is four times the 15-minute scrape interval.
+ALIVE_WINDOW = 4 * 1800
+# Price history and delivered alerts are only needed for the 7-day report window.
+RETENTION = 30 * 86400
 
 
 class Busy(Exception):
@@ -28,11 +34,12 @@ def format_price(price, currency):
 
 
 class Service:
-    def __init__(self, store, client, tgbot, metrics):
+    def __init__(self, store, client, tgbot, metrics, alive_window=ALIVE_WINDOW):
         self.store = store
         self.client = client
         self.tgbot = tgbot
         self.metrics = metrics
+        self.alive_window = alive_window
         self.adapters = {source: adapter(client) for source, adapter in ADAPTERS.items()}
         self.running = False
 
@@ -58,6 +65,9 @@ class Service:
                 await self.scrape_watch(watch, summary)
             if watch_ids is None:
                 await self.scrape_items(summary)
+                pruned = await self.store.prune(time.time() - RETENTION)
+                if any(pruned):
+                    log.info("Pruned %d stale price points and %d delivered alerts", *pruned)
             await self._deliver_alerts()
         finally:
             self.running = False
@@ -78,52 +88,68 @@ class Service:
         new_records, drops = [], []
         errors = []
         watch_model = Watch.model_validate(watch)
+        label = watch["label"] or watch["ref"]
         try:
-            for listing in await adapter.fetch(watch_model):
-                record, is_new, old_price, new_price = await self.store.upsert_listing(
-                    source=watch["source"], external_id=listing.external_id, watch_id=watch["id"],
-                    title=listing.title, price=listing.price, currency=listing.currency,
-                    region=listing.region, condition=listing.condition,
-                    description=listing.description, images=listing.images, url=listing.url)
-                seen += 1
-                if is_new:
-                    new_count += 1
-                    new_records.append((record, listing))
-                else:
-                    if new_price is not None:
-                        await self.store.add_price_point(record["id"], new_price, record["currency"])
-                        if old_price is not None and new_price < old_price:
-                            drops.append((record, old_price, new_price))
+            listings = await adapter.fetch(watch_model)
         except (ScrapeError, Exception) as error:  # one bad watch must not kill the rest
             errors.append(f"{type(error).__name__}: {error}")
             log.warning("Watch %s failed: %s: %s", watch["ref"], type(error).__name__, error)
             self.metrics.watches.labels(source=watch["source"], result="error").inc()
+            summary["errors"].extend(f"{label}: {error}" for error in errors)
+            await self.store.record_scrape(watch["id"], started, time.time(), 0, 0, errors)
+            return
+        # The fetched page is persisted in one transaction: a single commit (fsync) per
+        # watch instead of one per row, and a failure rolls the whole watch back.
+        try:
+            async with self.store.transaction():
+                for listing in listings:
+                    record, is_new, old_price, new_price = await self.store.upsert_listing(
+                        source=watch["source"], external_id=listing.external_id, watch_id=watch["id"],
+                        title=listing.title, price=listing.price, currency=listing.currency,
+                        region=listing.region, condition=listing.condition,
+                        description=listing.description, images=listing.images, url=listing.url)
+                    seen += 1
+                    if is_new:
+                        new_count += 1
+                        new_records.append((record, listing))
+                    else:
+                        if new_price is not None:
+                            await self.store.add_price_point(record["id"], new_price, record["currency"])
+                            if old_price is not None and new_price < old_price:
+                                drops.append((record, old_price, new_price))
+                if new_records:
+                    if len(new_records) > SUMMARY_THRESHOLD:
+                        priced = [l for _, l in new_records if l.price is not None]
+                        cheapest = min(priced, key=lambda l: l.price, default=None)
+                        detail = (f"«{label}»: +{len(new_records)} новых объявлений"
+                                  + (f", самое дешёвое: {cheapest.title} — {format_price(cheapest.price, cheapest.currency)}"
+                                     if cheapest else ""))
+                        await self.store.add_alert(new_records[0][0]["id"], "new", detail)
+                    else:
+                        for record, listing in new_records:
+                            detail = (f"Новое объявление ({label}): {listing.title} — "
+                                      f"{format_price(listing.price, listing.currency)}"
+                                      + (f" ({listing.region})" if listing.region else ""))
+                            await self.store.add_alert(record["id"], "new", detail)
+                for record, old_price, new_price in drops:
+                    await self.store.add_alert(
+                        record["id"], "price_dropped",
+                        f"Снижение цены: {record['title']} — {format_price(old_price, record['currency'])} → "
+                        f"{format_price(new_price, record['currency'])}")
+        except (ScrapeError, Exception) as error:
+            errors.append(f"{type(error).__name__}: {error}")
+            log.warning("Watch %s failed: %s: %s", watch["ref"], type(error).__name__, error)
+            self.metrics.watches.labels(source=watch["source"], result="error").inc()
+            seen = new_count = 0  # the transaction rolled back: nothing was persisted
+            new_records, drops = [], []
         else:
             self.metrics.watches.labels(source=watch["source"], result="ok").inc()
         await self.store.record_scrape(watch["id"], started, time.time(), seen, new_count, errors)
 
-        label = watch["label"] or watch["ref"]
         if new_records:
-            if len(new_records) > SUMMARY_THRESHOLD:
-                priced = [l for _, l in new_records if l.price is not None]
-                cheapest = min(priced, key=lambda l: l.price, default=None)
-                detail = (f"«{label}»: +{len(new_records)} новых объявлений"
-                          + (f", самое дешёвое: {cheapest.title} — {format_price(cheapest.price, cheapest.currency)}"
-                             if cheapest else ""))
-                await self.store.add_alert(new_records[0][0]["id"], "new", detail)
-            else:
-                for record, listing in new_records:
-                    detail = (f"Новое объявление ({label}): {listing.title} — "
-                              f"{format_price(listing.price, listing.currency)}"
-                              + (f" ({listing.region})" if listing.region else ""))
-                    await self.store.add_alert(record["id"], "new", detail)
             self.metrics.alerts.labels(kind="new").inc(len(new_records))
             summary["new"] += len(new_records)
         for record, old_price, new_price in drops:
-            await self.store.add_alert(
-                record["id"], "price_dropped",
-                f"Снижение цены: {record['title']} — {format_price(old_price, record['currency'])} → "
-                f"{format_price(new_price, record['currency'])}")
             self.metrics.alerts.labels(kind="price_dropped").inc()
         summary["price_drops"] += len(drops)
         summary["seen"] += seen
@@ -179,7 +205,9 @@ class Service:
         return await self._check_item(item)
 
     async def _deliver_alerts(self):
-        """Deliver each undelivered alert to its owners/subscribers (None = the admins)."""
+        """Deliver each undelivered alert to its owners/subscribers (None = the admins).
+        Recipients are independent: one failure must not block the others, and an alert
+        is marked delivered only when every recipient is delivered or permanently refused."""
         alerts = await self.store.pending_alerts(ALERT_MAX_AGE)
         if not alerts:
             return
@@ -187,21 +215,27 @@ class Service:
         for alert in alerts:
             for tg_id in alert["recipients"]:
                 by_user[tg_id].append(alert)
-        delivered = set()
-        try:
-            for tg_id, group in by_user.items():
-                lines = ["Объявления: мониторинг рынка БУ"]
-                lines += [f"- {alert['detail']}\n  {alert['url']}" for alert in group]
+        remaining = {alert["id"]: set(alert["recipients"]) for alert in alerts}
+        for tg_id, group in by_user.items():
+            lines = ["Объявления: мониторинг рынка БУ"]
+            lines += [f"- {alert['detail']}\n  {alert['url']}" for alert in group]
+            try:
                 if tg_id is None:
                     await self.tgbot.notify("\n".join(lines))
                 else:
                     await self.tgbot.notify_user(tg_id, "\n".join(lines))
-                delivered.update(alert["id"] for alert in group)
-        except Exception as error:
-            # Undelivered alerts stay pending and are retried on the next scrape.
-            log.warning("Could not deliver alerts to %s user(s): %s", len(by_user), type(error).__name__)
+            except Refused as error:
+                # The recipient is permanently unreachable (e.g. blocked): stop retrying.
+                log.warning("Delivery to %s refused, dropping %d alert(s): %s", tg_id, len(group), error)
+            except Exception as error:
+                # Stays in `remaining`: retried on the next scrape.
+                log.warning("Could not deliver %d alert(s) to %s: %s", len(group), tg_id, type(error).__name__)
+                continue
+            for alert in group:
+                remaining[alert["id"]].discard(tg_id)
+        delivered = sorted(alert_id for alert_id, rest in remaining.items() if not rest)
         if delivered:
-            await self.store.mark_delivered(sorted(delivered))
+            await self.store.mark_delivered(delivered)
 
     async def report(self):
         """Cheapest listings per active watch plus the 7-day median price; listings below the
@@ -210,10 +244,11 @@ class Service:
         lines = ["Отчёт: БУ рынок (актуальные цены)", time.strftime("%d.%m.%Y %H:%M")]
         sent = False
         week_ago = time.time() - REPORT_MEDIAN_WINDOW
+        live_since = time.time() - self.alive_window
         for watch in await self.store.watches():
             if not watch["active"] or watch["owner"] is not None:
                 continue
-            rows = await self.store.listings(watch_id=watch["id"], limit=500)
+            rows = await self.store.listings(watch_id=watch["id"], limit=500, since=live_since)
             medians = await self.store.price_medians(watch["id"], week_ago)
             label = watch["label"] or watch["ref"]
             if not rows:

@@ -193,7 +193,10 @@ class Service:
             return Reply("Сессий пока нет. Напишите сообщение или /new.")
         buttons = [[(("▶ " if s["active"] else "") + f"#{s['id']} {s['title']}"[:40], f"sw:{s['id']}"),
                     ("Удалить", f"del:{s['id']}")] for s in sessions[:20]]
-        return Reply("Ваши сессии:\n" + "\n".join(self.session_line(s) for s in sessions), buttons)
+        lines = [self.session_line(s) for s in sessions[:20]]
+        if len(sessions) > 20:  # the Telegram message cannot grow without a bound
+            lines.append(f"… ещё {len(sessions) - 20}")
+        return Reply("Ваши сессии:\n" + "\n".join(lines), buttons)
 
     async def switch(self, user, argument):
         try:

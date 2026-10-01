@@ -77,6 +77,8 @@ services:
       TGBOT_ADMINS: ${TGBOT_ADMINS:-}
       # Point the bot at the torrent service; set TGBOT_TORRENT_URL= in .env to disable /magnet.
       TGBOT_TORRENT_URL: ${TGBOT_TORRENT_URL:-http://torrent:8080}
+      # Outlives TORRENT_METADATA_TIMEOUT on the torrent side; see torrents.py.
+      TGBOT_TORRENT_METADATA_TIMEOUT: ${TGBOT_TORRENT_METADATA_TIMEOUT:-240}
       # Point the bot at the market scraper; set TGBOT_SCRAPER_URL= in .env to disable /query, /watch, ...
       TGBOT_SCRAPER_URL: ${TGBOT_SCRAPER_URL:-http://scraper:8080}
     volumes:
@@ -180,76 +182,6 @@ services:
       timeout: 6s
       start_period: 180s
       retries: 4
-  gemma:
-    <<: *common
-    profiles: ["gemma"]
-    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
-    gpus: all
-    environment:
-      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-0,1}
-    volumes:
-      - ./models:/models:ro
-    ports:
-      - "127.0.0.1:8081:8080"
-    command:
-      - --model
-      - /models/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf
-      - --alias
-      - gemma4-26b-a4b
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8080"
-      - --device
-      - CUDA0,CUDA1
-      - --gpu-layers
-      - all
-      - --override-tensor
-      - 'token_embd\.weight=CUDA0'
-      - --fit
-      - "off"
-      - --split-mode
-      - layer
-      - --tensor-split
-      # - "0.53,0.47"
-      - ${GEMMA_TENSOR_SPLIT:-0.50,0.50}
-      #- --ctx-size
-      #- ${GEMMA_CTX_SIZE:-262144}
-
-      #- --parallel
-      #- "1"
-
-      # - parallel - start
-      - --ctx-size
-      - ${GEMMA_CTX_SIZE:-262144}
-      - --parallel
-      - "2"
-      - --no-kv-unified
-      - --cont-batching
-      # - parallel - end
-      - --flash-attn
-      - "on"
-      - --cache-type-k
-      - q8_0
-      - --cache-type-v
-      - q8_0
-      - --cache-ram
-      - "0"
-      - --ctx-checkpoints
-      - "0"
-      - --batch-size
-      - "512"
-      - --ubatch-size
-      - ${GEMMA_UBATCH_SIZE:-64}
-      - --threads
-      - "4"
-      - --poll
-      - "0"
-      - --jinja
-      - --metrics
-      - --sleep-idle-seconds
-      - "-1"
-
   qwen:
     <<: *common
     profiles: ["qwen"]
@@ -297,7 +229,7 @@ services:
       - --ctx-checkpoints
       - '0'
       - --batch-size
-      - '512'
+      - '2048'
       - --ubatch-size
       - ${QWEN_UBATCH_SIZE:-64}
       - --threads

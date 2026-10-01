@@ -16,7 +16,7 @@ DEFAULTS = {
     "temperature": 0.7,
     "request_timeout": 600,
     "rate_limit_per_min": 10,
-    "llm_backends": {"qwen": "http://qwen:8080", "gemma": "http://gemma:8080"},
+    "llm_backends": {"qwen": "http://qwen:8080"},
     "image_backends": {"sdxl": "http://sdxl:8080", "qwen-image": "http://qwen-image:8188"},
 }
 
@@ -24,7 +24,7 @@ DEFAULTS = {
 # The bot may only talk to these compose services, addressed by service name. On Docker Desktop any
 # container reaches host-published ports via host.docker.internal and other bridge networks by IP, so
 # network separation alone cannot keep e.g. the uncensored qwen-image-uc service away from the bot.
-ALLOWED_BACKENDS = {"llm_backends": {"qwen", "gemma"}, "image_backends": {"sdxl", "qwen-image"}}
+ALLOWED_BACKENDS = {"llm_backends": {"qwen"}, "image_backends": {"sdxl", "qwen-image"}}
 
 
 def backend_error(kind, name, url):
@@ -47,6 +47,7 @@ class Settings:
     start_bot: bool = True
     torrent_url: str = ""
     scraper_url: str = "http://scraper:8080"
+    torrent_metadata_timeout: float = 240.0
 
     @classmethod
     def from_env(cls):
@@ -58,6 +59,7 @@ class Settings:
             workflows_path=Path(os.getenv("TGBOT_WORKFLOWS", "/workflows")),
             torrent_url=os.getenv("TGBOT_TORRENT_URL", ""),
             scraper_url=os.getenv("TGBOT_SCRAPER_URL", "http://scraper:8080"),
+            torrent_metadata_timeout=float(os.getenv("TGBOT_TORRENT_METADATA_TIMEOUT", "240")),
         )
         if len(config.admin_key) < 16:
             raise ValueError("TGBOT_ADMIN_KEY must be set (at least 16 characters); see TGBOT-RU.md")

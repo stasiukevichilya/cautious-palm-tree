@@ -1,8 +1,10 @@
 """Engine tests: a real libtorrent session and a local seeder, no external network."""
 import asyncio
+import json
 import os
 import random
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -162,6 +164,22 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value(self.metrics.metadata_fetches, ("timeout",)), 1)
         self.assertEqual(self.engine.torrents, {})
 
+    async def test_unconfirmed_metadata_is_dropped_after_ttl(self):
+        meta, key = await self.wait_metadata(self.magnet)
+        self.assertEqual(self.engine.torrents[key]["state"], "metadata")
+        # Backdate the record: a user who never confirmed must not keep DHT busy forever.
+        self.engine.torrents[key]["created"] = time.time() - self.engine.metadata_ttl - 1
+        await self.engine.tick()
+        self.assertEqual(self.engine.torrents, {})
+        self.assertEqual(value(self.metrics.metadata_fetches, ("expired",)), 1)
+
+    async def test_fresh_metadata_survives_ticks(self):
+        meta, key = await self.wait_metadata(self.magnet)
+        for _ in range(3):
+            await self.engine.tick()
+        self.assertIn(key, self.engine.torrents)
+        self.assertEqual(self.engine.torrents[key]["state"], "metadata")
+
     async def test_bad_magnet(self):
         for bad in ("http://example.com/a.torrent", "magnet:?xt=urn:btih:zz", ""):
             with self.assertRaises(MagnetError):
@@ -169,9 +187,13 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_remove_while_downloading_counts_cancelled(self):
         meta, key = await self.wait_metadata(self.magnet)
-        # 8 KiB/s makes 512 KiB take ~64 s, so the download is guaranteed to be in flight.
-        self.engine.torrents[key]["handle"].set_download_limit(8 * 1024)
         await self.engine.start_download(self.magnet, 20, peer=self.peer)
+        # start_download re-adds the torrent: the limit goes to the fresh handle, set
+        # while paused so the 512 KiB cannot finish before it takes effect (~64 s at 8 KiB/s).
+        handle = self.engine.torrents[key]["handle"]
+        handle.pause()
+        handle.set_download_limit(8 * 1024)
+        handle.resume()
         self.assertEqual(self.engine.torrents[key]["state"], "downloading")
         await asyncio.sleep(0.5)
         self.assertEqual(self.engine.torrents[key]["state"], "downloading")
@@ -185,6 +207,90 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
     async def test_remove_unknown(self):
         with self.assertRaises(KeyError):
             self.engine.remove("0" * 40)
+
+    async def restart_engine(self):
+        """Simulate a container restart: the process dies, so its libtorrent session
+        and peer connections are gone; a fresh Engine restores from the queue file.
+
+        A mere pause() is not enough: the old session stays alive in the process and
+        its stale sockets shadow the fresh session's peer connections.
+        """
+        await self.engine.stop()
+        session = self.engine.session
+        self.engine.session = None  # the tick loop is stopped; detach the session
+        self.engine.torrents.clear()  # release the handles
+        session.pause()
+        del session  # refcount drops to zero: the session (and its sockets) die
+        engine = Engine(self.destination, Metrics(), tick_seconds=0.2)
+        await engine.start()
+        self.engine = engine  # asyncTearDown then drops the restored engine
+        return engine
+
+    async def test_queue_survives_restart(self):
+        meta, key = await self.wait_metadata(self.magnet)
+        await self.engine.start_download(self.magnet, 20, peer=self.peer)
+        handle = self.engine.torrents[key]["handle"]
+        handle.pause()
+        handle.set_download_limit(8 * 1024)  # keep the 512 KiB file downloading for a while
+        handle.resume()
+        await asyncio.sleep(1.5)
+        self.assertEqual(self.engine.torrents[key]["state"], "downloading")
+        stored = json.loads(self.engine.queue_path.read_text(encoding="utf-8"))
+        self.assertEqual(stored[key]["state"], "downloading")
+        self.assertEqual(stored[key]["magnet"], self.magnet)
+        engine = await self.restart_engine()
+        self.assertIn(key, engine.torrents)
+        self.assertEqual(engine.torrents[key]["state"], "downloading")
+        self.assertTrue(engine.torrents[key]["handle"].is_valid())
+        # The seeder hint is restored from the queue file; in prod DHT/trackers
+        # rediscover peers and the re-added torrent re-fetches its metadata.
+        deadline = asyncio.get_event_loop().time() + 30
+        while engine.torrents[key]["state"] != "seeding":
+            if asyncio.get_event_loop().time() > deadline:
+                self.fail(f"restored torrent stuck in {engine.torrents[key]['state']!r}")
+            await asyncio.sleep(0.1)
+        self.assertEqual((self.destination / "sample.bin").read_bytes(), self.payload)
+
+    async def test_queue_restores_pending_metadata(self):
+        meta, key = await self.wait_metadata(self.magnet)
+        stored = json.loads(self.engine.queue_path.read_text(encoding="utf-8"))
+        self.assertEqual(stored[key]["state"], "metadata")
+        engine = await self.restart_engine()
+        self.assertIn(key, engine.torrents)
+        self.assertEqual(engine.torrents[key]["state"], "metadata")
+        self.assertTrue(engine.torrents[key]["handle"].is_valid())
+
+    async def test_broken_queue_file_is_ignored(self):
+        self.engine.queue_path.write_text("{not json", encoding="utf-8")
+        engine = await self.restart_engine()
+        self.assertEqual(engine.torrents, {})
+        # A later mutation rewrites the file to valid JSON.
+        key = magnet_hash(self.magnet)
+        await engine.metadata(self.magnet, 20, peer=self.peer)
+        data = json.loads(engine.queue_path.read_text(encoding="utf-8"))
+        self.assertIn(key, data)
+
+    async def test_old_queue_file_without_peer_is_restored(self):
+        """Queue files written before the peer hint existed must still load,
+        and re-saving them must not raise (a live restart hit exactly this)."""
+        key = magnet_hash(self.magnet)
+        self.engine.queue_path.write_text(json.dumps({
+            key: {"magnet": self.magnet, "state": "downloading", "name": "sample.bin",
+                  "size": len(self.payload), "num_files": 1, "files": [["sample.bin", len(self.payload)]],
+                  "started": None, "created": 0}}), encoding="utf-8")
+        engine = await self.restart_engine()
+        self.assertIn(key, engine.torrents)
+        self.assertIsNone(engine.torrents[key].get("peer"))
+        # a later save rewrites the file in the current format (with a peer slot)
+        engine._save_queue()
+        self.assertIn("peer", json.loads(engine.queue_path.read_text(encoding="utf-8"))[key])
+
+    async def test_remove_updates_queue_file(self):
+        meta, key = await self.wait_metadata(self.magnet)
+        await self.engine.start_download(self.magnet, 20, peer=self.peer)
+        self.assertIn(key, json.loads(self.engine.queue_path.read_text(encoding="utf-8")))
+        self.engine.remove(key)
+        self.assertEqual(json.loads(self.engine.queue_path.read_text(encoding="utf-8")), {})
 
 
 if __name__ == "__main__":

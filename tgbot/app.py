@@ -83,7 +83,9 @@ def create_app(settings=None, llm=None, images=None, runner_factory=Runner):
     settings = settings or Settings.from_env()
     store = Store(settings.db_path)
     metrics = Metrics()
-    torrents = Torrents(settings.torrent_url, settings.admin_key) if settings.torrent_url else None
+    torrents = (Torrents(settings.torrent_url, settings.admin_key,
+                         metadata_timeout=settings.torrent_metadata_timeout)
+                if settings.torrent_url else None)
     market = Market(settings.scraper_url, settings.admin_key) if settings.scraper_url else None
     service = Service(store, llm or LLM(), images or Images(settings.workflows_path), metrics,
                       torrents=torrents, market=market)

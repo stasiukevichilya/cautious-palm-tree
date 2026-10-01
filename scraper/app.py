@@ -43,6 +43,11 @@ class ItemIn(BaseModel):
     url: str = Field(min_length=1, max_length=300)
 
 
+class ScrapeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    watch_ids: list[int] | None = Field(default=None, max_length=50)
+
+
 def create_app(settings=None):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -98,6 +103,14 @@ def create_app(settings=None):
     async def list_watches(owner: int | None = None):
         """All watches, or (with ?owner=) the ones the user owns or is subscribed to."""
         return await store.watches_for_owner(owner) if owner is not None else await store.watches()
+
+    @app.get("/api/watches/find", dependencies=[Depends(authorized)])
+    async def find_watch(source: str, ref: str):
+        """Resolve one watch by (source, ref); the bot uses this instead of listing all watches."""
+        record = await store.find_watch(source, ref)
+        if not record:
+            raise HTTPException(404, "Watch not found")
+        return record
 
     @app.post("/api/watches", dependencies=[Depends(authorized)], status_code=201)
     async def create_watch(watch: WatchIn):
@@ -161,11 +174,10 @@ def create_app(settings=None):
             raise HTTPException(502, f"Could not check the item: {type(error).__name__}") from error
 
     @app.post("/api/scrape", dependencies=[Depends(authorized)])
-    async def scrape_now(body: dict | None = None):
+    async def scrape_now(body: ScrapeIn | None = None):
         """Run a scrape now; watch_ids limits it to particular watches."""
         try:
-            watch_ids = (body or {}).get("watch_ids")
-            return await service.scrape(watch_ids)
+            return await service.scrape(body.watch_ids if body else None)
         except Busy as error:
             raise HTTPException(409, str(error)) from error
 

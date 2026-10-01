@@ -5,11 +5,11 @@
 
 COMPOSE := docker compose
 INFRA := prometheus grafana tempo otel gpu-exporter loki alloy
-MODEL_PROFILES := --profile qwen --profile gemma --profile sdxl --profile qwen-image --profile qwen-image-uc
+MODEL_PROFILES := --profile qwen --profile sdxl --profile qwen-image --profile qwen-image-uc
 SDXL_COMPOSE := $(COMPOSE) -f compose.yaml -f compose.sdxl-dual.yaml
 QWEN_IMAGE_DIT ?= base
 
-.PHONY: help infra qwen gemma sdxl sdxl-dual sdxl-build sdxl-download sdxl-test models-stop status logs-qwen logs-gemma logs-sdxl stop down
+.PHONY: help infra qwen sdxl sdxl-dual sdxl-build sdxl-download sdxl-test models-stop status logs-qwen logs-sdxl stop down
 .PHONY: qwen-image-uc qwen-image-uc-build qwen-image-uc-download qwen-image-uc-test qwen-image-uc-browser-test logs-qwen-image-uc
 .PHONY: tgbot tgbot-build tgbot-key tgbot-test tgbot-browser-test logs-tgbot
 .PHONY: scraper scraper-build scraper-test logs-scraper
@@ -29,8 +29,7 @@ help:
 	@echo "make qwen-image-build / qwen-image-download / qwen-image-test / qwen-image-browser-test"
 	@echo "make qwen-image-unsloth - the same with unsloth Q8_0 DiT (make qwen-image-download-unsloth first)"
 	@echo "make infra       — запустить инфраструктуру без моделей"
-	@echo "make qwen        — переключиться на Qwen"
-	@echo "make gemma       — переключиться на Gemma"
+	@echo "make qwen        — запустить Qwen"
 	@echo "make sdxl        — SDXL на одной GPU, API/UI :8082"
 	@echo "make sdxl-dual   — SDXL на двух GPU, API/UI :8082"
 	@echo "make sdxl-build  — собрать образ SDXL"
@@ -39,7 +38,6 @@ help:
 	@echo "make models-stop — остановить все модели, освободить VRAM"
 	@echo "make status      — показать состояние сервисов"
 	@echo "make logs-qwen   — смотреть логи Qwen"
-	@echo "make logs-gemma  — смотреть логи Gemma"
 	@echo "make stop        — остановить весь стек"
 	@echo "make down        — удалить контейнеры и сеть, сохранить volumes"
 
@@ -47,16 +45,10 @@ infra:
 	$(COMPOSE) up -d $(INFRA)
 
 qwen: infra
-	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 gemma sdxl qwen-image qwen-image-uc
+	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 sdxl qwen-image qwen-image-uc
 	$(COMPOSE) --profile qwen up -d --no-deps qwen
 	@echo "Qwen запускается: http://127.0.0.1:8080"
 	@echo "Готовность: curl --fail http://127.0.0.1:8080/health"
-
-gemma: infra
-	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen sdxl qwen-image qwen-image-uc
-	$(COMPOSE) --profile gemma up -d --no-deps gemma
-	@echo "Gemma запускается: http://127.0.0.1:8081"
-	@echo "Готовность: curl --fail http://127.0.0.1:8081/health"
 
 sdxl-build:
 	$(COMPOSE) --profile sdxl build sdxl
@@ -69,13 +61,13 @@ sdxl-test:
 
 sdxl: infra
 	mkdir -p outputs/sdxl
-	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen gemma qwen-image qwen-image-uc
+	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-image qwen-image-uc
 	$(COMPOSE) --profile sdxl up -d --no-deps sdxl
 	@echo "SDXL: http://127.0.0.1:8082"
 
 sdxl-dual: infra
 	mkdir -p outputs/sdxl
-	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen gemma qwen-image qwen-image-uc
+	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-image qwen-image-uc
 	$(SDXL_COMPOSE) --profile sdxl up -d --no-deps sdxl
 	@echo "SDXL dual: http://127.0.0.1:8082"
 
@@ -87,7 +79,7 @@ qwen-image-uc-download:
 
 qwen-image-uc: infra
 	mkdir -p outputs/qwen-image-uc
-	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen gemma sdxl qwen-image
+	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen sdxl qwen-image
 	$(COMPOSE) --profile qwen-image-uc up -d --no-deps qwen-image-uc
 	@echo "Qwen-Image UC: http://127.0.0.1:8085"
 
@@ -182,7 +174,7 @@ qwen-image-download-unsloth:
 
 qwen-image: infra
 	mkdir -p outputs/qwen-image
-	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen gemma sdxl qwen-image-uc
+	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen sdxl qwen-image-uc
 	QWEN_IMAGE_DIT=$(QWEN_IMAGE_DIT) $(COMPOSE) --profile qwen-image up -d --no-deps qwen-image
 	@echo "Qwen-Image ($(QWEN_IMAGE_DIT)): http://127.0.0.1:8083"
 
@@ -204,16 +196,13 @@ qwen-image-browser-test:
 	  local/sdxl-browser-test:1
 
 models-stop:
-	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen gemma sdxl qwen-image qwen-image-uc
+	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen sdxl qwen-image qwen-image-uc
 
 status:
 	$(COMPOSE) $(MODEL_PROFILES) ps -a
 
 logs-qwen:
 	$(COMPOSE) logs --tail=100 -f qwen
-
-logs-gemma:
-	$(COMPOSE) logs --tail=100 -f gemma
 
 logs-sdxl:
 	$(COMPOSE) logs --tail=100 -f sdxl

@@ -70,8 +70,8 @@ if a < b and c > d:
         self.assertNotIn("<a", self.one("[x](javascript:alert(1))"))
 
     def test_table_is_monospace(self):
-        self.assertEqual(self.one("| Модель | VRAM |\n|---|---:|\n| qwen | 16 |\n| gemma<b> | 12 |"),
-                         "<pre><code>Модель   | VRAM\n---------+-----\nqwen     | 16\ngemma&lt;b&gt; | 12</code></pre>")
+        self.assertEqual(self.one("| Модель | VRAM |\n|---|---:|\n| qwen | 16 |\n| llama<b> | 12 |"),
+                         "<pre><code>Модель   | VRAM\n---------+-----\nqwen     | 16\nllama&lt;b&gt; | 12</code></pre>")
 
     def test_nested_quotes_and_ordered_start(self):
         self.assertEqual(self.one("> a\n>> b"), "<blockquote>a\n\nb</blockquote>")

@@ -34,10 +34,6 @@ scrape_configs:
     static_configs:
       - targets: ['qwen:8080']
 
-  - job_name: gemma
-    static_configs:
-      - targets: ['gemma:8080']
-
   - job_name: gpu
     scrape_interval: 5s
     scrape_timeout: 4s

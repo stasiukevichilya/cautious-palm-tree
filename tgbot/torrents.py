@@ -43,9 +43,12 @@ def human_size(value):
 
 
 class Torrents:
-    def __init__(self, url, admin_key, timeout=30.0):
+    def __init__(self, url, admin_key, timeout=30.0, metadata_timeout=240.0):
         self.url = url.rstrip("/")
         self.client = httpx.AsyncClient(timeout=timeout)
+        # Metadata waits for seeders on the service side (TORRENT_METADATA_TIMEOUT),
+        # so this call must outlive the service timeout or a slow fetch looks like a outage.
+        self.metadata_timeout = metadata_timeout
         self.headers = {"Authorization": f"Bearer {admin_key}"}
 
     async def close(self):
@@ -71,7 +74,7 @@ class Torrents:
 
     async def metadata(self, magnet):
         response = await self.client.post(f"{self.url}/api/metadata", json={"magnet": magnet},
-                                          headers=self.headers)
+                                          headers=self.headers, timeout=self.metadata_timeout)
         self._check(response)
         return response.json()
 

@@ -15,7 +15,7 @@ make qwen-image-uc-test
 make qwen-image-uc-browser-test
 ```
 
-`make qwen`, `make gemma`, `make sdxl`, `make qwen-image` и `make models-stop`
+`make qwen`, `make sdxl`, `make qwen-image` и `make models-stop`
 останавливают этот сервис. Telegram-бот (`make tgbot`) продолжает работать, но
 к UC-сервису доступа не имеет.
 
@@ -56,7 +56,7 @@ pipeline использует 40–50 шагов; negative prompt не дейс�
 
 ## Изоляция от Telegram-бота
 
-- Бот обращается только к сервисам `qwen`, `gemma`, `sdxl`, `qwen-image` по
+- Бот обращается только к сервисам `qwen`, `sdxl`, `qwen-image` по
   имени сервиса: другие хосты, IP-адреса и `host.docker.internal` отклоняются
   API настроек и игнорируются при чтении из базы (`tgbot/settings.py`,
   `ALLOWED_BACKENDS`). Это основная гарантия.

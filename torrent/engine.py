@@ -12,7 +12,9 @@ btmh), because in 2.1 `add_torrent_params.info_hash` of a v2 torrent is not the
 btih hash.
 """
 import asyncio
+import json
 import logging
+import os
 import re
 import shutil
 import time
@@ -64,13 +66,21 @@ class Engine:
 
     Registry states: metadata (added, data not requested), downloading,
     seeding (finished, still uploading), failed.
+
+    The registry is mirrored to a JSON queue file next to the downloads directory
+    (same volume) so a restart re-adds the torrents and resumes them from disk.
     """
 
-    def __init__(self, destination, metrics, notify=None, tick_seconds=5.0):
+    def __init__(self, destination, metrics, notify=None, tick_seconds=5.0, metadata_ttl=1800.0,
+                 queue_path=None):
         self.destination = Path(destination)
+        self.queue_path = Path(queue_path) if queue_path else self.destination.parent / "queue.json"
         self.metrics = metrics
         self.notify = notify  # async (text) -> None
         self.tick_seconds = tick_seconds
+        # A metadata-only torrent that nobody confirms is dropped after this many seconds
+        # (the bot's confirm button expires earlier, so the engine outlives the pending UI).
+        self.metadata_ttl = metadata_ttl
         self.session = lt.session(lt.default_settings())
         for host, port in DHT_ROUTERS:
             self.session.add_dht_router(host, port)
@@ -81,6 +91,7 @@ class Engine:
 
     async def start(self):
         self._stop.clear()
+        await self.load_queue()  # active downloads survive a restart
         self._task = asyncio.create_task(self._run())
 
     async def stop(self):
@@ -88,6 +99,65 @@ class Engine:
         if self._task:
             await self._task
             self._task = None
+
+    async def load_queue(self):
+        """Re-add the registry from the queue file after a restart.
+
+        The magnet string is stored with each record, which is all libtorrent
+        needs to recreate the torrent; data already on disk is picked up by hash.
+        Failed records are skipped on purpose: the user just re-sends the magnet.
+        """
+        if not self.queue_path.exists():
+            return
+        try:
+            data = json.loads(self.queue_path.read_text(encoding="utf-8"))
+        except Exception:
+            log.warning("Could not read the torrent queue %s; starting empty", self.queue_path,
+                        exc_info=True)
+            return
+        restored = 0
+        for key, record in data.items():
+            if not isinstance(record, dict) or \
+                    record.get("state") not in ("metadata", "downloading", "seeding"):
+                continue
+            try:
+                if magnet_hash(record["magnet"]) != key:
+                    log.warning("Torrent queue: hash mismatch for %s, skipping", key)
+                    continue
+                atp = lt.parse_magnet_uri(record["magnet"])
+                atp.save_path = str(self.destination)
+                if record["state"] == "metadata":
+                    atp.flags |= METADATA_ONLY_FLAGS
+                handle = self.session.add_torrent(atp)
+                peer = record.get("peer")
+                if peer:
+                    # Must follow add_torrent without yielding: a delayed connect is
+                    # silently dropped (same quirk as in metadata()/start_download()).
+                    handle.connect_peer((str(peer[0]), int(peer[1])))
+            except Exception:
+                log.warning("Could not restore torrent %s from the torrent queue", key, exc_info=True)
+                continue
+            record["handle"] = handle
+            self.torrents[key] = record
+            restored += 1
+        if restored:
+            log.info("Restored %d torrent(s) from the queue", restored)
+            self._save_queue()
+
+    def _save_queue(self):
+        """Persist the registry (without handles) via an atomic file swap.
+        Best effort: losing the queue costs at most a re-send of the magnet."""
+        try:
+            fields = ("magnet", "peer", "state", "name", "size", "num_files", "files",
+                      "started", "created")
+            # .get(): queue files from older versions lack the newer fields.
+            payload = {key: {field: record.get(field) for field in fields}
+                       for key, record in self.torrents.items()}
+            tmp = self.queue_path.with_name(self.queue_path.name + ".tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, self.queue_path)
+        except Exception:
+            log.warning("Could not save the torrent queue to %s", self.queue_path, exc_info=True)
 
     async def _run(self):
         while not self._stop.is_set():
@@ -112,6 +182,7 @@ class Engine:
         if record and record["state"] != "metadata":
             self._drop(key, record)
             del self.torrents[key]
+            self._save_queue()
             record = None
         if record is None:
             try:
@@ -125,9 +196,12 @@ class Engine:
                 # connect_peer must follow add_torrent without yielding to the event
                 # loop: a delayed connect makes the peer connection not survive resume.
                 handle.connect_peer(peer)
-            record = {"handle": handle, "state": "metadata", "name": "",
-                      "size": 0, "num_files": 0, "files": [], "started": None}
+            record = {"handle": handle, "magnet": magnet.strip(), "peer": peer,
+                      "state": "metadata", "name": "",
+                      "size": 0, "num_files": 0, "files": [], "started": None,
+                      "created": time.time()}
             self.torrents[key] = record
+            self._save_queue()
         deadline = time.monotonic() + timeout
         while True:
             if time.monotonic() > deadline:
@@ -155,6 +229,7 @@ class Engine:
         """Drop a metadata-only torrent that no longer can be waited on."""
         self._drop(key, record)
         self.torrents.pop(key, None)
+        self._save_queue()
         self.metrics.metadata_fetches.labels(result).inc()
         raise MagnetTimeout(key)
 
@@ -191,7 +266,10 @@ class Engine:
         record["handle"] = handle
         record["state"] = "downloading"
         record["started"] = time.time()
+        if peer:
+            record["peer"] = peer  # kept for the restart path; an old hint is harmless
         self.metrics.downloads.labels("started").inc()
+        self._save_queue()
         return self._info(key, record)
 
     def list(self):
@@ -215,20 +293,34 @@ class Engine:
             self.metrics.downloads.labels("cancelled").inc()
         self._drop(key, record)
         del self.torrents[key]
+        self._save_queue()
 
     def _drop(self, key, record):
         try:
             self.session.remove_torrent(record["handle"])
         except Exception:
             pass
-        self.metrics.download_speed.labels(key).set(0)
-        self.metrics.upload_speed.labels(key).set(0)
+        # Remove the per-hash gauge series entirely: a zeroed series would otherwise
+        # stay in the collector for every hash the service has ever seen.
+        for gauge in (self.metrics.download_speed, self.metrics.upload_speed):
+            try:
+                gauge.remove(key)
+            except KeyError:
+                pass
 
     # stats
     async def tick(self):
         now = time.time()
         down_sum = up_sum = active = seeding = 0
+        changed = False
         for key, record in list(self.torrents.items()):
+            if record["state"] == "metadata" and now - record.get("created", now) > self.metadata_ttl:
+                # Unconfirmed metadata fetch: drop it so DHT lookups do not run forever.
+                self._drop(key, record)
+                del self.torrents[key]
+                self.metrics.metadata_fetches.labels("expired").inc()
+                changed = True
+                continue
             handle = record["handle"]
             try:
                 st = handle.status()
@@ -247,14 +339,18 @@ class Engine:
                 if (st.state in (STATES.finished, STATES.seeding) and st.progress >= 1.0
                         and st.total_wanted_done > 0):
                     await self._finish(key, record, st, now)
+                    changed = True
                 elif st.error:
                     record["state"] = "failed"
                     self.metrics.downloads.labels("failed").inc()
+                    changed = True
                     await self._notify(f"⚠️ Ошибка при скачивании «{record['name']}»: {st.error}")
             if record["state"] == "downloading":
                 active += 1
             elif record["state"] == "seeding":
                 seeding += 1
+        if changed:
+            self._save_queue()
         self.metrics.active_downloads.set(active)
         self.metrics.seeding.set(seeding)
         # Payload counters are monotonic: a removed torrent shrinks the sums, so only

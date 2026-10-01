@@ -38,6 +38,24 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(watches[0]["params"], {"max_pages": 5})
         self.assertTrue(watches[0]["active"])
 
+    def test_find_watch(self):
+        async def scenario():
+            await self.store.open()
+            await self.store.seed_watches([{"source": "kufar", "ref": "/l/videokarty", "label": "K",
+                                            "filter": ["3090"], "params": {"max_pages": 5}}])
+            found = await self.store.find_watch("kufar", "/l/videokarty")
+            missing = await self.store.find_watch("kufar", "/l/nothing")
+            other_source = await self.store.find_watch("onliner", "/l/videokarty")
+            return found, missing, other_source
+
+        found, missing, other_source = run(scenario())
+        self.assertIsNone(missing)
+        self.assertIsNone(other_source)
+        self.assertEqual(found["label"], "K")
+        self.assertEqual(found["filter"], ["3090"])
+        self.assertEqual(found["params"], {"max_pages": 5})
+        self.assertTrue(found["active"])
+
     def test_upsert_new_then_price_drop(self):
         async def scenario():
             await self.store.open()
@@ -189,6 +207,88 @@ class StoreTests(unittest.TestCase):
         by_source, pending = run(scenario())
         self.assertEqual(by_source, {"kufar": 1, "onliner": 1})
         self.assertEqual(pending, 1)
+
+    def test_transaction_rolls_back(self):
+        """A failed watch transaction leaves the database untouched."""
+
+        async def scenario():
+            await self.store.open()
+            try:
+                async with self.store.transaction():
+                    await self.store.upsert_listing(
+                        source="kufar", external_id="1", watch_id=None, title="a",
+                        price=1.0, currency="BYN", region="", condition="",
+                        description="", images=[], url="")
+                    raise RuntimeError("boom")
+            except RuntimeError:
+                pass
+            rows = await self.store.listings()
+            return rows
+
+        self.assertEqual(run(scenario()), [])
+
+    def test_transaction_commits_on_success(self):
+        async def scenario():
+            await self.store.open()
+            async with self.store.transaction():
+                await self.store.upsert_listing(
+                    source="kufar", external_id="1", watch_id=None, title="a",
+                    price=1.0, currency="BYN", region="", condition="",
+                    description="", images=[], url="")
+                await self.store.upsert_listing(
+                    source="kufar", external_id="2", watch_id=None, title="b",
+                    price=2.0, currency="BYN", region="", condition="",
+                    description="", images=[], url="")
+            return len(await self.store.listings())
+
+        self.assertEqual(run(scenario()), 2)
+
+    def test_listings_since_filters_stale(self):
+        async def scenario():
+            await self.store.open()
+            await self.store.upsert_listing(source="kufar", external_id="1", watch_id=None,
+                                            title="live", price=1.0, currency="BYN", region="",
+                                            condition="", description="", images=[], url="")
+            await self.store.upsert_listing(source="kufar", external_id="2", watch_id=None,
+                                            title="stale", price=2.0, currency="BYN", region="",
+                                            condition="", description="", images=[], url="")
+            now = time.time()
+            await self.store.db.execute("UPDATE listings SET last_seen_at = ? WHERE external_id = '2'",
+                                        (now - 999999,))
+            await self.store.db.commit()
+            live = await self.store.listings(since=now - 100)
+            all_rows = await self.store.listings()
+            return live, all_rows
+
+        live, all_rows = run(scenario())
+        self.assertEqual([r["external_id"] for r in live], ["1"])
+        self.assertEqual(len(all_rows), 2)
+
+    def test_prune_drops_stale_history_and_delivered_alerts(self):
+        async def scenario():
+            await self.store.open()
+            listing, _, _, _ = await self.store.upsert_listing(
+                source="kufar", external_id="1", watch_id=None, title="a",
+                price=1.0, currency="BYN", region="", condition="", description="",
+                images=[], url="")
+            old = time.time() - 60 * 86400  # two months ago
+            await self.store.db.execute(
+                "INSERT INTO price_history (listing_id, price, currency, at) VALUES (?,?,?,?)",
+                (listing["id"], 1.0, "BYN", old))
+            await self.store.add_alert(listing["id"], "new", "old alert")
+            await self.store.db.execute(
+                "UPDATE alerts SET delivered = 1, created_at = ? WHERE detail = 'old alert'", (old,))
+            await self.store.add_alert(listing["id"], "new", "fresh alert")
+            await self.store.db.execute(
+                "UPDATE alerts SET created_at = ? WHERE detail = 'fresh alert'", (old,))
+            await self.store.db.execute(
+                "UPDATE alerts SET delivered = 1 WHERE detail = 'fresh alert'")
+            await self.store.db.commit()
+            return await self.store.prune(time.time() - 30 * 86400)
+
+        history_rows, alert_rows = run(scenario())
+        self.assertEqual(history_rows, 1)   # the two-month-old price point
+        self.assertEqual(alert_rows, 2)     # both delivered two-month-old alerts
 
 
 if __name__ == "__main__":

@@ -61,7 +61,7 @@ class ConfigurationTests(unittest.TestCase):
         # Docker Desktop does not isolate bridge networks, so the bot pins its backends to service names.
         settings = (ROOT.parent / "tgbot/settings.py").read_text()
         allowed = settings.split("ALLOWED_BACKENDS = ", 1)[1].split("\n", 1)[0]
-        self.assertEqual(allowed, '{"llm_backends": {"qwen", "gemma"}, "image_backends": {"sdxl", "qwen-image"}}')
+        self.assertEqual(allowed, '{"llm_backends": {"qwen"}, "image_backends": {"sdxl", "qwen-image"}}')
         self.assertIn("if host != name:", settings)
 
 

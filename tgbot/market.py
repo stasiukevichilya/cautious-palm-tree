@@ -11,10 +11,10 @@ NOISE_EXCLUDES = ["ноутбук", "куплю", "купить", "компью�
 
 
 class Market:
-    def __init__(self, url, admin_key, timeout=30.0):
+    def __init__(self, url, admin_key, timeout=30.0, client=None):
         self.url = url.rstrip("/")
         self.admin_key = admin_key
-        self.client = httpx.AsyncClient(timeout=timeout)
+        self.client = client or httpx.AsyncClient(timeout=timeout)
 
     async def close(self):
         await self.client.aclose()
@@ -33,8 +33,14 @@ class Market:
                 "exclude": NOISE_EXCLUDES, "params": {"max_pages": 8}, "owner": owner}
 
     async def find_watch(self, source, ref):
-        watches = await self._request("GET", "/api/watches")
-        return next((w for w in watches if w["source"] == source and w["ref"] == ref), None)
+        """A point lookup on the server; 404 means 'no such watch'. Fetching the
+        whole watch table here would cost every user's listings per /query."""
+        try:
+            return await self._request("GET", "/api/watches/find", params={"source": source, "ref": ref})
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 404:
+                return None
+            raise
 
     async def create_watch(self, watch):
         return await self._request("POST", "/api/watches", json=watch)

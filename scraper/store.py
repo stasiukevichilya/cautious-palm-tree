@@ -3,6 +3,7 @@ import collections
 import json
 import statistics
 import time
+from contextlib import asynccontextmanager
 
 import aiosqlite
 
@@ -78,13 +79,16 @@ class Store:
     def __init__(self, path):
         self.path = path
         self.db = None
+        self._in_txn = False
 
     async def open(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # The database is the only persistent state; keep it private like the tgbot one.
         self.path.touch(mode=0o600, exist_ok=True)
         self.path.chmod(0o600)
-        self.db = await aiosqlite.connect(self.path)
+        # Autocommit mode: each statement commits at once, except inside transaction()
+        # below, where a whole scrape of one watch commits (fsyncs) a single time.
+        self.db = await aiosqlite.connect(self.path, isolation_level=None)
         self.db.row_factory = aiosqlite.Row
         await self.db.executescript(SCHEMA)
         # Databases from older versions pick the missing pieces up here.
@@ -119,6 +123,24 @@ class Store:
         if self.db:
             await self.db.close()
 
+    @asynccontextmanager
+    async def transaction(self):
+        """Group writes into one commit; a rolled-back watch leaves the database untouched."""
+        await self.db.execute("BEGIN")
+        self._in_txn = True
+        try:
+            yield
+        except BaseException:
+            await self.db.execute("ROLLBACK")
+            self._in_txn = False
+            raise
+        await self.db.execute("COMMIT")
+        self._in_txn = False
+
+    async def _commit(self):
+        if not self._in_txn:  # inside transaction() the final COMMIT covers the batch
+            await self.db.commit()
+
     # watches
     async def seed_watches(self, watches):
         """Environment/seed values only fill gaps; later edits come from the API."""
@@ -130,7 +152,7 @@ class Store:
                  json.dumps(watch.get("filter", [])), json.dumps(watch.get("exclude", [])),
                  json.dumps(watch.get("params", {})), 1 if watch.get("active", True) else 0,
                  watch.get("owner")))
-        await self.db.commit()
+        await self._commit()
 
     async def watches(self):
         rows = await self.db.execute_fetchall(
@@ -146,6 +168,21 @@ class Store:
             result.append(record)
         return result
 
+    async def find_watch(self, source, ref):
+        """One watch by its (source, ref) pair, or None. A point lookup: the bot
+        no longer fetches the whole table to check for duplicates."""
+        rows = await self.db.execute_fetchall(
+            "SELECT w.*, (SELECT COUNT(*) FROM listings l WHERE l.watch_id = w.id) AS listings "
+            "FROM watches w WHERE w.source = ? AND w.ref = ? LIMIT 1", (source, ref))
+        if not rows:
+            return None
+        record = dict(rows[0])
+        record["filter"] = json.loads(record["filter"])
+        record["exclude"] = json.loads(record["exclude"])
+        record["params"] = json.loads(record["params"])
+        record["active"] = bool(record["active"])
+        return record
+
     async def add_watch(self, watch):
         cursor = await self.db.execute(
             """INSERT INTO watches (source, ref, label, filter, exclude, params, active, owner)
@@ -157,7 +194,7 @@ class Store:
              json.dumps(watch.get("filter", [])), json.dumps(watch.get("exclude", [])),
              json.dumps(watch.get("params", {})), 1 if watch.get("active", True) else 0,
              watch.get("owner")))
-        await self.db.commit()
+        await self._commit()
         rows = await self.db.execute_fetchall("SELECT * FROM watches WHERE id = ?", (cursor.lastrowid,))
         if not rows and cursor.lastrowid is None:  # upsert with no new row: find the existing one
             rows = await self.db.execute_fetchall(
@@ -166,12 +203,12 @@ class Store:
 
     async def delete_watch(self, watch_id):
         cursor = await self.db.execute("DELETE FROM watches WHERE id = ?", (watch_id,))
-        await self.db.commit()
+        await self._commit()
         return cursor.rowcount == 1
 
     async def set_watch_active(self, watch_id, active):
         cursor = await self.db.execute("UPDATE watches SET active = ? WHERE id = ?", (1 if active else 0, watch_id))
-        await self.db.commit()
+        await self._commit()
         return cursor.rowcount == 1
 
     async def watches_for_owner(self, tg_id):
@@ -197,13 +234,13 @@ class Store:
             return False
         await self.db.execute("INSERT OR IGNORE INTO subscriptions (watch_id, tg_id) VALUES (?, ?)",
                               (watch_id, tg_id))
-        await self.db.commit()
+        await self._commit()
         return True
 
     async def unsubscribe(self, watch_id, tg_id):
         cursor = await self.db.execute("DELETE FROM subscriptions WHERE watch_id = ? AND tg_id = ?",
                                        (watch_id, tg_id))
-        await self.db.commit()
+        await self._commit()
         return cursor.rowcount == 1
 
     # listings
@@ -221,7 +258,7 @@ class Store:
                    WHERE id = ?""",
                 (watch_id, title, price, currency, region, condition, description,
                  json.dumps(images, ensure_ascii=False), url, now, record["id"]))
-            await self.db.commit()
+            await self._commit()
             return record, False, record["price"], price
         cursor = await self.db.execute(
             """INSERT INTO listings (source, external_id, watch_id, title, price, currency, region, condition,
@@ -233,7 +270,7 @@ class Store:
             await self.db.execute(
                 "INSERT INTO price_history (listing_id, price, currency, at) VALUES (?, ?, ?, ?)",
                 (listing_id, price, currency, now))
-        await self.db.commit()
+        await self._commit()
         rows = await self.db.execute_fetchall("SELECT * FROM listings WHERE id = ?", (listing_id,))
         return dict(rows[0]), True, None, price
 
@@ -241,14 +278,21 @@ class Store:
         await self.db.execute(
             "INSERT INTO price_history (listing_id, price, currency, at) VALUES (?, ?, ?, ?)",
             (listing_id, price, currency, time.time()))
-        await self.db.commit()
+        await self._commit()
 
-    async def listings(self, watch_id=None, limit=200):
+    async def listings(self, watch_id=None, limit=200, since=None):
+        """Stored ads; `since` keeps only ones still seen recently (live listings)."""
         query = "SELECT * FROM listings"
+        clauses: list[str] = []
         args: list = []
         if watch_id is not None:
-            query += " WHERE watch_id = ?"
+            clauses.append("watch_id = ?")
             args.append(watch_id)
+        if since is not None:
+            clauses.append("last_seen_at >= ?")
+            args.append(since)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY last_seen_at DESC LIMIT ?"
         args.append(limit)
         rows = await self.db.execute_fetchall(query, args)
@@ -262,7 +306,7 @@ class Store:
     # items (product links with per-owner price tracking)
     async def add_item(self, owner, url):
         cursor = await self.db.execute("INSERT INTO items (owner, url) VALUES (?, ?)", (owner, url))
-        await self.db.commit()
+        await self._commit()
         return await self.item(cursor.lastrowid)
 
     async def item(self, item_id):
@@ -292,12 +336,12 @@ class Store:
 
     async def delete_item(self, item_id):
         cursor = await self.db.execute("DELETE FROM items WHERE id = ?", (item_id,))
-        await self.db.commit()
+        await self._commit()
         return cursor.rowcount == 1
 
     async def set_item_active(self, item_id, active):
         await self.db.execute("UPDATE items SET active = ? WHERE id = ?", (1 if active else 0, item_id))
-        await self.db.commit()
+        await self._commit()
 
     async def touch_item(self, item_id, listing_id=None):
         if listing_id is not None:
@@ -305,7 +349,7 @@ class Store:
                                   (listing_id, time.time(), item_id))
         else:
             await self.db.execute("UPDATE items SET checked_at = ? WHERE id = ?", (time.time(), item_id))
-        await self.db.commit()
+        await self._commit()
 
     async def price_medians(self, watch_id, since):
         """Median price per currency over price observations since `since`, for one watch."""
@@ -324,7 +368,7 @@ class Store:
         await self.db.execute(
             "INSERT INTO alerts (listing_id, kind, detail, created_at) VALUES (?, ?, ?, ?)",
             (listing_id, kind, detail, time.time()))
-        await self.db.commit()
+        await self._commit()
 
     async def pending_alerts(self, max_age=7 * 86400):
         """Undelivered alerts with the listing link and recipients, oldest first.
@@ -363,7 +407,7 @@ class Store:
             return
         await self.db.executemany("UPDATE alerts SET delivered = 1 WHERE id = ?",
                                   [(alert_id,) for alert_id in alert_ids])
-        await self.db.commit()
+        await self._commit()
 
     async def alerts(self, limit=50):
         rows = await self.db.execute_fetchall(
@@ -372,12 +416,22 @@ class Store:
                ORDER BY a.id DESC LIMIT ?""", (limit,))
         return [dict(row) for row in rows]
 
+    # retention
+    async def prune(self, older_than):
+        """Drop stale price points and delivered alerts; returns (history_rows, alert_rows)."""
+        cursor = await self.db.execute("DELETE FROM price_history WHERE at < ?", (older_than,))
+        history_rows = cursor.rowcount
+        cursor = await self.db.execute(
+            "DELETE FROM alerts WHERE delivered = 1 AND created_at < ?", (older_than,))
+        await self._commit()
+        return history_rows, cursor.rowcount
+
     # scrape runs
     async def record_scrape(self, watch_id, started, finished, seen, new_count, errors):
         await self.db.execute(
             "INSERT INTO scrapes (watch_id, started_at, finished_at, seen, new, errors) VALUES (?, ?, ?, ?, ?, ?)",
             (watch_id, started, finished, seen, new_count, json.dumps(errors, ensure_ascii=False)))
-        await self.db.commit()
+        await self._commit()
 
     async def scrapes(self, limit=20):
         rows = await self.db.execute_fetchall(

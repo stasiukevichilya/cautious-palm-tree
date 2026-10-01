@@ -2,7 +2,7 @@
 
 Полный генератор: DiT + Qwen3-VL Heretic + VAE. Это отдельный сервис
 `qwen-image` на ComfyUI, а не модель чата в llama.cpp. Существующие сервисы
-`qwen` и `gemma` остаются на llama.cpp без изменения их моделей.
+`qwen` остается на llama.cpp без изменения модели.
 
 ## Подготовка и запуск
 
@@ -40,7 +40,7 @@ Playwright из SDXL), загружает workflow и сохраняет скр�
 и в этом профиле не работают.
 
 `make qwen-image` останавливает SDXL и LLM перед запуском. Обратное переключение
-через `make qwen`, `make gemma`, `make sdxl` или `make sdxl-dual` останавливает
+через `make qwen`, `make sdxl` или `make sdxl-dual` останавливает
 Qwen-Image. `make models-stop` освобождает GPU от всех моделей проекта.
 Прямой `docker compose up` не выполняет взаимное исключение моделей.
 

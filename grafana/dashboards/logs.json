@@ -1,6 +1,6 @@
 {
   "uid": "local-llm-logs",
-  "title": "Local models — логи Qwen / Gemma / SDXL",
+  "title": "Local models — логи Qwen / SDXL",
   "schemaVersion": 39,
   "version": 1,
   "editable": true,
@@ -17,7 +17,7 @@
   "panels": [
     {
       "id": 1,
-      "title": "Логи Qwen / Gemma / SDXL",
+      "title": "Логи Qwen / SDXL",
       "type": "logs",
       "description": "stdout/stderr контейнеров выбранных моделей. Логи остановленной модели остаются доступны в пределах срока хранения и выбранного интервала.",
       "datasource": {
@@ -98,10 +98,10 @@
         "name": "model",
         "label": "Модель / job",
         "type": "custom",
-        "query": "qwen,gemma,sdxl,qwen-image,qwen-image-uc,tgbot,scraper,torrent",
+        "query": "qwen,sdxl,qwen-image,qwen-image-uc,tgbot,scraper,torrent",
         "multi": true,
         "includeAll": true,
-        "allValue": "qwen|gemma|sdxl|qwen-image|qwen-image-uc|tgbot|scraper|torrent",
+        "allValue": "qwen|sdxl|qwen-image|qwen-image-uc|tgbot|scraper|torrent",
         "current": {
           "text": "All",
           "value": "$__all"
@@ -140,11 +140,6 @@
           {
             "text": "qwen",
             "value": "qwen",
-            "selected": false
-          },
-          {
-            "text": "gemma",
-            "value": "gemma",
             "selected": false
           }
         ]

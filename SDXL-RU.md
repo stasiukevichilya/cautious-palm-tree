@@ -60,8 +60,8 @@ curl --fail http://127.0.0.1:8082/health/ready
 python3 smoke-test-sdxl.py
 ```
 
-`make sdxl` и `make sdxl-dual` останавливают Qwen/Gemma перед запуском.
-`make qwen` и `make gemma` останавливают SDXL. `make models-stop` останавливает
+`make sdxl` и `make sdxl-dual` останавливают Qwen перед запуском.
+`make qwen` останавливает SDXL. `make models-stop` останавливает
 все модели. Веса, результаты и named volumes при этом сохраняются.
 `.NOTPARALLEL` действует внутри одного make; не выполняйте независимые команды
 переключения одновременно. Прямой `docker compose up` обходит переключение.

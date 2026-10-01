@@ -9,6 +9,7 @@ from adapters.base import Listing
 from metrics import Metrics
 from service import Busy, Service
 from store import Store
+from tgbot import Refused
 
 
 class FakeClient:
@@ -17,10 +18,12 @@ class FakeClient:
 
 
 class FakeTgbot:
-    def __init__(self, fail=False):
+    def __init__(self, fail=False, refused=(), errors=()):
         self.sent = []
         self.user_sent = {}
         self.fail = fail
+        self.refused = set(refused)  # users rejected with Refused (e.g. blocked in tgbot)
+        self.errors = set(errors)  # users that fail with a plain transport error
 
     async def notify(self, text):
         if self.fail:
@@ -29,6 +32,10 @@ class FakeTgbot:
 
     async def notify_user(self, tg_id, text):
         if self.fail:
+            raise ConnectionError("refused")
+        if tg_id in self.refused:
+            raise Refused(f"user {tg_id} has no access")
+        if tg_id in self.errors:
             raise ConnectionError("refused")
         self.user_sent.setdefault(tg_id, []).append(text)
 
@@ -134,6 +141,60 @@ class ServiceTests(unittest.TestCase):
 
         pending = asyncio.run(scenario())
         self.assertEqual(len(pending), 1)
+
+    def test_one_failed_recipient_does_not_block_others(self):
+        """A transport error for one user must not prevent the other from receiving."""
+        self.tgbot = FakeTgbot(errors={7})
+        self.service.tgbot = self.tgbot
+        self.service.adapters["kufar"] = FakeAdapter([make_listing(1, 5000.0)])
+
+        async def scenario():
+            await self.store.open()
+            await self.store.seed_watches([self.seed_watch(owner=7)])
+            await self.store.subscribe(1, 8)  # user 8 subscribes to the owner's watch
+            await self.service.scrape()
+            return await self.store.pending_alerts()
+
+        pending = asyncio.run(scenario())
+        self.assertEqual(len(pending), 1)  # still pending for the unreachable user 7
+        self.assertEqual(self.tgbot.user_sent.get(8), [self.tgbot.user_sent[8][0]])
+        self.assertIn("Новое объявление", self.tgbot.user_sent[8][0])
+
+    def test_refused_recipient_is_dropped_without_retry(self):
+        """tgbot 409 (blocked user) cannot be fixed by retries: the alert is dropped."""
+        self.tgbot = FakeTgbot(refused={7}, errors={8})
+        self.service.tgbot = self.tgbot
+        self.service.adapters["kufar"] = FakeAdapter([make_listing(1, 5000.0)])
+
+        async def scenario():
+            await self.store.open()
+            await self.store.seed_watches([self.seed_watch(owner=7)])
+            await self.store.subscribe(1, 8)
+            await self.service.scrape()
+            return await self.store.pending_alerts()
+
+        pending = asyncio.run(scenario())
+        # User 7 is refused -> its alerts are dropped; user 8 fails -> stays pending.
+        self.assertEqual(len(pending), 1)
+        self.assertNotIn(7, [r["tg_id"] for r in []])
+        self.assertEqual(self.tgbot.user_sent, {})  # nothing was delivered
+
+    def test_report_excludes_stale_listings(self):
+        """Ads not seen within the alive window are not reported as current."""
+        self.service.adapters["kufar"] = FakeAdapter([make_listing(1, 5000.0)])
+
+        async def scenario():
+            await self.store.open()
+            await self.store.seed_watches([self.seed_watch()])
+            await self.service.scrape()
+            import time as _time
+            await self.store.db.execute(
+                "UPDATE listings SET last_seen_at = ?", (_time.time() - 10 * 3600,))
+            await self.store.db.commit()
+            return await self.service.report()
+
+        text = asyncio.run(scenario())
+        self.assertIn("объявлений не найдено", text)
 
     def test_flood_is_summarized(self):
         flood = [make_listing(i, 1000.0 + i, title=f"RTX 3090 #{i}") for i in range(60)]

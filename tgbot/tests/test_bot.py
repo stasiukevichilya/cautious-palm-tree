@@ -14,6 +14,7 @@ from app import create_app
 from chat import Reply, Service, User
 from images import Images
 from llm import LLM, Unavailable
+from market import Market
 from settings import Settings, mask_token
 from store import NotFound, Store
 from torrents import NotFound as TorrentNotFound, Timeout, magnet_hash
@@ -482,6 +483,42 @@ class MagnetTests(Async):
         self.assertIn("не найдена", (await self.service.torrent_delete(ADMIN, "c" * 40)).text)
 
 
+class MarketClientTests(Async):
+    async def test_find_watch_is_a_point_lookup(self):
+        seen = []
+
+        async def handler(request):
+            seen.append(request.url.path)
+            if request.url.path == "/api/watches/find":
+                if request.url.params["ref"] == "/l?query=rtx+5090&sort=lst.d":
+                    return httpx.Response(200, json={"id": 7, "source": "kufar",
+                                                     "ref": "/l?query=rtx+5090&sort=lst.d"})
+                return httpx.Response(404)
+            raise AssertionError("the full watch list must not be fetched: " + str(request.url))
+
+        market = Market("http://scraper.test", KEY,
+                        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+        try:
+            found = await market.find_watch("kufar", "/l?query=rtx+5090&sort=lst.d")
+            self.assertEqual(found["id"], 7)
+            self.assertIsNone(await market.find_watch("kufar", "/l?query=none&sort=lst.d"))
+            self.assertEqual(seen, ["/api/watches/find", "/api/watches/find"])
+        finally:
+            await market.close()
+
+    async def test_find_watch_keeps_other_status_errors(self):
+        async def handler(request):
+            return httpx.Response(502, text="upstream failure")
+
+        market = Market("http://scraper.test", KEY,
+                        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+        try:
+            with self.assertRaises(httpx.HTTPStatusError):
+                await market.find_watch("kufar", "/l?query=x&sort=lst.d")
+        finally:
+            await market.close()
+
+
 class MarketTests(Async):
     async def test_market_not_configured(self):
         await self.allow(ALICE)
@@ -595,10 +632,8 @@ class MarketTests(Async):
 
 
 class BackendTests(unittest.IsolatedAsyncioTestCase):
-    async def test_llm_picks_running_backend_and_streams(self):
+    async def test_llm_uses_running_backend_and_streams(self):
         def handler(request):
-            if request.url.host == "qwen":
-                return httpx.Response(502)
             if request.url.path == "/health":
                 return httpx.Response(200, json={"status": "ok"})
             body = json.loads(request.content)
@@ -609,8 +644,8 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(200, text=text)
 
         llm = LLM(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
-        backends = {"qwen": "http://qwen:8080", "gemma": "http://gemma:8080"}
-        self.assertEqual(await llm.active(backends), ("gemma", "http://gemma:8080"))
+        backends = {"qwen": "http://qwen:8080"}
+        self.assertEqual(await llm.active(backends), ("qwen", "http://qwen:8080"))
         parts = [x async for x in llm.stream(backends, [], 10, 0.5, 30)]
         self.assertEqual(parts, ["Hel", "lo"])
 
