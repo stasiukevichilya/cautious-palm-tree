@@ -208,6 +208,63 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(KeyError):
             self.engine.remove("0" * 40)
 
+    async def test_pause_resume(self):
+        meta, key = await self.wait_metadata(self.magnet)
+        await self.engine.start_download(self.magnet, 20, peer=self.peer)
+        self.engine.torrents[key]["handle"].set_download_limit(8 * 1024)  # keep it downloading
+        await asyncio.sleep(1.0)
+        self.assertEqual(self.engine.torrents[key]["state"], "downloading")
+        record = self.engine.torrents[key]
+        with self.assertRaises(ValueError):
+            self.engine.resume(key)  # not paused yet
+        info = self.engine.pause(key)
+        self.assertEqual(info["state"], "paused")
+        self.assertEqual(record["paused_from"], "downloading")
+        with self.assertRaises(ValueError):
+            self.engine.pause(key)  # already paused
+        with self.assertRaises(KeyError):
+            self.engine.resume("0" * 40)  # unknown hash is KeyError, not ValueError
+        await asyncio.sleep(0.5)  # let a tick run
+        self.assertEqual(value(self.metrics.active_downloads), 0)
+        self.assertEqual(value(self.metrics.download_speed, (key,)), 0)
+        info = self.engine.resume(key)
+        self.assertEqual(info["state"], "downloading")
+        self.assertNotIn("paused_from", record)
+        record["handle"].set_download_limit(0)  # let the 512 KiB finish
+        await self.wait_state(key, "seeding")
+        # pause works during seeding too, and resume restores seeding
+        info = self.engine.pause(key)
+        self.assertEqual(info["state"], "paused")
+        self.assertEqual(record["paused_from"], "seeding")
+        self.engine.resume(key)
+        await self.wait_state(key, "seeding")
+        self.assertEqual(value(self.metrics.seeding), 1)
+        self.assertEqual((self.destination / "sample.bin").read_bytes(), self.payload)
+
+    async def test_paused_survives_restart(self):
+        meta, key = await self.wait_metadata(self.magnet)
+        await self.engine.start_download(self.magnet, 20, peer=self.peer)
+        self.engine.torrents[key]["handle"].set_download_limit(8 * 1024)  # keep it downloading
+        await asyncio.sleep(1.0)
+        self.engine.pause(key)
+        stored = json.loads(self.engine.queue_path.read_text(encoding="utf-8"))
+        self.assertEqual(stored[key]["state"], "paused")
+        self.assertEqual(stored[key]["paused_from"], "downloading")
+        engine = await self.restart_engine()
+        record = engine.torrents[key]
+        self.assertEqual(record["state"], "paused")
+        self.assertEqual(record["paused_from"], "downloading")
+        with self.assertRaises(ValueError):
+            engine.pause(key)  # still paused after the restart
+        engine.resume(key)
+        record["handle"].set_download_limit(0)
+        deadline = asyncio.get_event_loop().time() + 30
+        while engine.torrents[key]["state"] != "seeding":
+            if asyncio.get_event_loop().time() > deadline:
+                self.fail(f"torrent {key} stuck in {engine.torrents[key]['state']!r}")
+            await asyncio.sleep(0.1)
+        self.assertEqual((self.destination / "sample.bin").read_bytes(), self.payload)
+
     async def restart_engine(self):
         """Simulate a container restart: the process dies, so its libtorrent session
         and peer connections are gone; a fresh Engine restores from the queue file.

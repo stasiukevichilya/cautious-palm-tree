@@ -34,12 +34,20 @@ scrape_configs:
     static_configs:
       - targets: ['qwen:8080']
 
+  - job_name: qwen-mtp
+    static_configs:
+      - targets: ['qwen-mtp:8080']
+
+  - job_name: bonsai-mtp
+    static_configs:
+      - targets: ['bonsai-mtp:8080']
+
   - job_name: gpu
     scrape_interval: 5s
     scrape_timeout: 4s
     static_configs:
       - targets: ['gpu-exporter:9835']
 
-  - job_name: dsh-otel
+  - job_name: otel
     static_configs:
       - targets: ['otel:8889']

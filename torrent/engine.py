@@ -64,8 +64,9 @@ def human_size(value):
 class Engine:
     """Owns the libtorrent session and the registry of known torrents.
 
-    Registry states: metadata (added, data not requested), downloading,
-    seeding (finished, still uploading), failed.
+    Registry states: metadata (added, data not requested), downloading, paused
+    (paused_from remembers downloading/seeding), seeding (finished, still
+    uploading), failed.
 
     The registry is mirrored to a JSON queue file next to the downloads directory
     (same volume) so a restart re-adds the torrents and resumes them from disk.
@@ -118,7 +119,7 @@ class Engine:
         restored = 0
         for key, record in data.items():
             if not isinstance(record, dict) or \
-                    record.get("state") not in ("metadata", "downloading", "seeding"):
+                    record.get("state") not in ("metadata", "downloading", "seeding", "paused"):
                 continue
             try:
                 if magnet_hash(record["magnet"]) != key:
@@ -134,6 +135,9 @@ class Engine:
                     # Must follow add_torrent without yielding: a delayed connect is
                     # silently dropped (same quirk as in metadata()/start_download()).
                     handle.connect_peer((str(peer[0]), int(peer[1])))
+                if record["state"] == "paused":
+                    # Re-added downloads start immediately; keep the pre-restart pause.
+                    handle.pause()
             except Exception:
                 log.warning("Could not restore torrent %s from the torrent queue", key, exc_info=True)
                 continue
@@ -149,7 +153,7 @@ class Engine:
         Best effort: losing the queue costs at most a re-send of the magnet."""
         try:
             fields = ("magnet", "peer", "state", "name", "size", "num_files", "files",
-                      "started", "created")
+                      "started", "created", "paused_from")
             # .get(): queue files from older versions lack the newer fields.
             payload = {key: {field: record.get(field) for field in fields}
                        for key, record in self.torrents.items()}
@@ -275,6 +279,31 @@ class Engine:
     def list(self):
         return [self._info(key, record) for key, record in self.torrents.items()]
 
+    def pause(self, key):
+        """Pause an active download (or seeding upload); state is persisted."""
+        record = self.torrents.get(key)
+        if not record:
+            raise KeyError(key)
+        if record["state"] not in ("downloading", "seeding"):
+            raise ValueError(f"загрузка не активна (состояние: {record['state']})")
+        record["paused_from"] = record["state"]
+        record["state"] = "paused"
+        record["handle"].pause()
+        self._save_queue()
+        return self._info(key, record)
+
+    def resume(self, key):
+        """Resume a paused download, restoring the state it was paused from."""
+        record = self.torrents.get(key)
+        if not record:
+            raise KeyError(key)
+        if record["state"] != "paused":
+            raise ValueError(f"загрузка не на паузе (состояние: {record['state']})")
+        record["state"] = record.pop("paused_from", "downloading")
+        record["handle"].resume()
+        self._save_queue()
+        return self._info(key, record)
+
     def _info(self, key, record):
         try:
             st = record["handle"].status()
@@ -330,6 +359,13 @@ class Engine:
                 continue
             down_sum += st.total_payload_download
             up_sum += st.total_payload_upload
+            if record["state"] == "paused":
+                # Report zero speeds while paused; the completion check below applies
+                # only to "downloading" records, so a finished-but-paused torrent
+                # switches to seeding on resume (next tick sees progress >= 1).
+                self.metrics.download_speed.labels(key).set(0)
+                self.metrics.upload_speed.labels(key).set(0)
+                continue
             self.metrics.download_speed.labels(key).set(st.download_payload_rate)
             self.metrics.upload_speed.labels(key).set(st.upload_payload_rate)
             if record["state"] == "downloading":

@@ -7,7 +7,7 @@ if [[ -e .env ]]; then
   echo '.env already exists; keep it to preserve pinned versions.'
   exit 1
 fi
-mkdir -p models workspace
+mkdir -p models
 umask 077
 tmp=$(mktemp .env.XXXXXX)
 trap 'rm -f "$tmp"' EXIT
@@ -17,14 +17,6 @@ pin_image() {
   digest=$(docker image inspect "$tag" --format '{{index .RepoDigests 0}}')
   printf '%s=%s\n' "$key" "$digest" >> "$tmp"
 }
-pin_image NODE_IMAGE node:24-bookworm-slim
-node_image=$(sed -n 's/^NODE_IMAGE=//p' "$tmp")
-dsh_version=$(docker run --rm "$node_image" npm view @deepseek-ai/dsh version | tr -d '\r')
-if [[ ! "$dsh_version" =~ ^0\.1\. ]]; then
-  echo "Check LoongSuite compatibility before using DSH $dsh_version" >&2
-  exit 1
-fi
-printf 'DSH_VERSION=%s\n' "$dsh_version" >> "$tmp"
 pin_image LLAMA_IMAGE ghcr.io/ggml-org/llama.cpp:server-cuda
 pin_image GPU_IMAGE utkuozdemir/nvidia_gpu_exporter:latest
 pin_image OTEL_IMAGE otel/opentelemetry-collector-contrib:latest
@@ -43,4 +35,4 @@ QWEN_MODEL_FILE=Qwen3.8-27B-UD-Q4_K_M.gguf
 EOF
 mv -- "$tmp" .env
 trap - EXIT
-echo 'Created .env with fixed image digests and DSH version. Check GPU order before starting.'
+echo 'Created .env with fixed image digests. Check GPU order before starting.'

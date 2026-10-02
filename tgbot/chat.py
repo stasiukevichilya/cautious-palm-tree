@@ -5,6 +5,7 @@ HTML (render.py); while it streams it is shown as plain text, since half-written
 """
 import asyncio
 import collections
+import html
 import logging
 import re
 import secrets
@@ -56,8 +57,13 @@ ADMIN_HELP = """
 /allow <tg_id> — открыть доступ
 /block <tg_id> — закрыть доступ
 /magnet <magnet-ссылка> — скачать торрент (покажет имя и размер, кнопка подтверждения)
-/torrents — текущие загрузки
-/torrent-del <hash> — убрать загрузку из очереди"""
+/torrents — текущие загрузки (состояние, прогресс, скорость, hash)
+/torrent-pause <hash> — поставить загрузку на паузу
+/torrent-resume <hash> — продолжить загрузку
+/torrent-del <hash> — убрать загрузку из очереди
+
+В /torrents у каждой загрузки под строкой полный hash: /torrent-pause, /torrent-resume и
+/torrent-del принимают весь hash или его уникальное начало."""
 
 COMMANDS = [("new", "Новая сессия"), ("sessions", "Мои сессии"), ("clear", "Очистить историю"),
             ("system", "Системный промпт сессии"), ("model", "Доступные модели"),
@@ -328,20 +334,54 @@ class Service:
             return Reply(f"⚠️ {error}")
         if not rows:
             return Reply("Загрузок нет.")
-        marks = {"downloading": "⬇", "seeding": "↥", "metadata": "…", "failed": "⚠"}
+        marks = {"downloading": "⬇", "seeding": "↥", "metadata": "…", "failed": "⚠", "paused": "⏸"}
         lines = []
         for row in rows:
             mark = marks.get(row["state"], "?")
-            progress = f" {row['progress'] * 100:.0f}%" if row["state"] == "downloading" else ""
-            lines.append(f"{mark} {row['name'] or row['info_hash'][:12]} — {row['state']}{progress}")
-        return Reply("\n".join(lines))
+            name = html.escape(row["name"] or row["info_hash"][:12])
+            progress = f" {row['progress'] * 100:.0f}%" \
+                if row["state"] in ("downloading", "paused") else ""
+            lines.append(f"{mark} {name} — {row['state']}{progress}{self._torrent_speed(row)}\n"
+                         f"<code>{row['info_hash']}</code>")
+        return Reply("\n".join(lines), html=True)
+
+    @staticmethod
+    def _torrent_speed(row):
+        """Current speed for the row's state: download while downloading, upload while seeding."""
+        if row["state"] in ("downloading", "paused"):
+            return f", {human_size(row.get('download_speed') or 0)}/с"
+        if row["state"] == "seeding":
+            return f", ↑ {human_size(row.get('upload_speed') or 0)}/с"
+        return ""
+
+    async def _torrent_key(self, argument):
+        """Full info_hash for the user's argument: the full hash (40/64 hex) or a
+        unique prefix of one from the current list. Returns (key, None) or (None, error text)."""
+        key = argument.strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{6,64}", key):
+            return None, "Укажите hash или его начало (от 6 символов) из /torrents."
+        if len(key) in (40, 64):
+            return key, None
+        try:
+            rows = await self.torrents.list()
+        except httpx.HTTPError:
+            return None, "⚠️ Сервис торрентов недоступен (make logs-torrent)."
+        except TorrentError as error:
+            return None, f"⚠️ {error}"
+        matches = sorted({row["info_hash"] for row in rows if row["info_hash"].startswith(key)})
+        if len(matches) == 1:
+            return matches[0], None
+        if not matches:
+            return None, "Загрузка не найдена. Список: /torrents"
+        return None, (f"Начало {key[:12]}… неоднозначно: "
+                      f"{', '.join(m[:12] + '…' for m in matches[:5])}")
 
     async def torrent_delete(self, user, argument):
         if not self.torrents:
             return Reply("Сервис торрентов не настроен (TGBOT_TORRENT_URL).")
-        key = argument.strip().lower()
-        if not re.fullmatch(r"[0-9a-f]{40,64}", key):
-            return Reply("Укажите hash из /torrents.")
+        key, error = await self._torrent_key(argument)
+        if error:
+            return Reply(error)
         try:
             await self.torrents.remove(key)
         except TorrentNotFound:
@@ -351,6 +391,38 @@ class Service:
         except TorrentError as error:
             return Reply(f"⚠️ {error}")
         return Reply(f"Загрузка {key[:12]}… убрана из очереди.")
+
+    async def torrent_pause(self, user, argument):
+        if not self.torrents:
+            return Reply("Сервис торрентов не настроен (TGBOT_TORRENT_URL).")
+        key, error = await self._torrent_key(argument)
+        if error:
+            return Reply(error)
+        try:
+            row = await self.torrents.pause(key)
+        except TorrentNotFound:
+            return Reply("Загрузка не найдена. Список: /torrents")
+        except httpx.HTTPError:
+            return Reply("⚠️ Сервис торрентов недоступен (make logs-torrent).")
+        except TorrentError as error:
+            return Reply(f"⚠️ {error}")
+        return Reply(f"⏸ «{row.get('name') or key[:12]}» на паузе. Продолжить: /torrent-resume {key[:12]}")
+
+    async def torrent_resume(self, user, argument):
+        if not self.torrents:
+            return Reply("Сервис торрентов не настроен (TGBOT_TORRENT_URL).")
+        key, error = await self._torrent_key(argument)
+        if error:
+            return Reply(error)
+        try:
+            row = await self.torrents.resume(key)
+        except TorrentNotFound:
+            return Reply("Загрузка не найдена. Список: /torrents")
+        except httpx.HTTPError:
+            return Reply("⚠️ Сервис торрентов недоступен (make logs-torrent).")
+        except TorrentError as error:
+            return Reply(f"⚠️ {error}")
+        return Reply(f"⬇️ «{row.get('name') or key[:12]}» продолжается. Прогресс: /torrents")
 
     # market monitoring (per user)
     async def market_query(self, user, argument):

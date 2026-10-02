@@ -64,6 +64,15 @@ class AppTests(unittest.TestCase):
             self.assertEqual(client.delete("/api/torrents/" + "0" * 40,
                                            headers=HEADERS).status_code, 404)
 
+    def test_pause_resume_unknown(self):
+        with TestClient(self.app) as client:
+            self.assertEqual(client.post("/api/torrents/" + "0" * 40 + "/pause",
+                                         headers=HEADERS).status_code, 404)
+            self.assertEqual(client.post("/api/torrents/" + "0" * 40 + "/resume",
+                                         headers=HEADERS).status_code, 404)
+            # the key is required
+            self.assertEqual(client.post("/api/torrents/" + "0" * 40 + "/pause").status_code, 401)
+
 
 if __name__ == "__main__":
     unittest.main()

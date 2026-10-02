@@ -96,7 +96,9 @@ def make_router(service):
 
     async def answer(message, reply):
         if reply:
-            await message.answer(reply.text, reply_markup=markup(reply))
+            async def call(text, parse_mode):
+                return await message.answer(text, reply_markup=markup(reply), parse_mode=parse_mode)
+            await formatted(call, reply.text, reply.html)
 
     @router.message(CommandStart())
     async def start(message: Message):
@@ -123,6 +125,8 @@ def make_router(service):
     command("allow", lambda user, arg: service.admin_access(arg, "allowed"), admin=True, with_args=True)
     command("block", lambda user, arg: service.admin_access(arg, "blocked"), admin=True, with_args=True)
     command("torrents", service.torrent_list, admin=True)
+    command("torrent-pause", service.torrent_pause, admin=True, with_args=True)
+    command("torrent-resume", service.torrent_resume, admin=True, with_args=True)
     command("torrent-del", service.torrent_delete, admin=True, with_args=True)
     command("query", service.market_query, with_args=True)
     command("queries", service.market_queries)

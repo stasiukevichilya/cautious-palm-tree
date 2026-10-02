@@ -23,7 +23,9 @@ Telegram-бот для запущенной LLM и генераторов изо
 
 Скачивание торрентов по magnet-ссылке из Telegram-бота (только администратор):
 `/magnet <ссылка>` показывает имя и размер, после подтверждения файл скачивается в
-`outputs/torrent`, `/torrents` — текущие загрузки, `/torrent-del <hash>` — убрать.
+`outputs/torrent`, `/torrents` — текущие загрузки (прогресс, скорость, hash),
+`/torrent-pause`/`/torrent-resume` — пауза/возобновление, `/torrent-del <hash>` —
+убрать (hash или его уникальное начало).
 `make torrent`, API http://127.0.0.1:8087 (Bearer TGBOT_ADMIN_KEY). Отключается
 `TGBOT_TORRENT_URL=` в .env. Метрики — в dashboard «Torrent downloads» Grafana.
 
@@ -31,6 +33,10 @@ SDXL Base 1.0: отдельный профиль генерации изобра
 Подготовка, режимы одной/двух GPU и проверки: [SDXL-RU.md](SDXL-RU.md).
 Запуск после подготовки: `make sdxl`, интерфейс http://127.0.0.1:8082.
 Сервис LLM называется `qwen`; управление: `make qwen`, `make models-stop`.
+Альтернативы (взаимоисключающие): `make qwen-mtp` (:8081) и `make bonsai-mtp` (:8089) —
+Ternary-Bonsai-2-27B Uncensored PQ2_0 + MTP. Bonsai работает только на форке PrismML
+llama.cpp, поэтому у него свой образ `bonsai/Dockerfile` (`make bonsai-mtp-build`) и
+переменные `BONSAI_MTP_*` (модель, GPU, split, контекст, слоты, MTP, ubatch, кеши) в compose.yaml.
 Текущий порт Grafana: http://127.0.0.1:3055.
 
 Рекомендуемый старт: Unsloth UD-Q4_K_M, контекст 131072, K/V q8_0, один слот, layer split 0.57/0.43. Только текст; mmproj и speculative/MTP не загружаются. Это расчетная конфигурация, которую нужно принять по результатам проверки на вашем ПК. Здесь проверен синтаксис Compose и Python; запуск модели и совместимость контейнеров на GPU не проверялись.

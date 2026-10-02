@@ -2,7 +2,7 @@ groups:
   - name: local-inference
     rules:
       - alert: ScrapeTargetDown
-        expr: up{job!~"llama|qwen|sdxl|tgbot|qwen-image|qwen-image-uc|torrent"} == 0
+        expr: up{job!~"llama|qwen|qwen-mtp|bonsai-mtp|sdxl|tgbot|qwen-image|qwen-image-uc|torrent"} == 0
         for: 3m
         labels:
           severity: warning

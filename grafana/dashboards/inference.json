@@ -28,7 +28,7 @@
         "x": 0,
         "y": 0,
         "w": 8,
-        "h": 4
+        "h": 5
       },
       "description": "0: профиль остановлен либо endpoint недоступен. При переключении моделей один остановленный профиль ожидаем.",
       "fieldConfig": {
@@ -40,11 +40,11 @@
               "type": "value",
               "options": {
                 "0": {
-                  "text": "Остановлена / недоступна",
+                  "text": "остановлена",
                   "color": "gray"
                 },
                 "1": {
-                  "text": "Доступна",
+                  "text": "работает",
                   "color": "green"
                 }
               }
@@ -70,9 +70,15 @@
           "fields": "",
           "values": false
         },
-        "colorMode": "value",
+        "colorMode": "background",
         "graphMode": "none",
-        "textMode": "auto"
+        "textMode": "value_and_name",
+        "orientation": "vertical",
+        "justifyMode": "center",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 18
+        }
       }
     },
     {
@@ -87,7 +93,7 @@
         "x": 8,
         "y": 0,
         "w": 8,
-        "h": 4
+        "h": 5
       },
       "description": "",
       "fieldConfig": {
@@ -131,7 +137,7 @@
         "x": 16,
         "y": 0,
         "w": 8,
-        "h": 4
+        "h": 5
       },
       "description": "",
       "fieldConfig": {
@@ -173,15 +179,19 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 4,
+        "y": 5,
         "w": 12,
         "h": 4
       },
-      "description": "Оценка Prometheus по счётчику llama.cpp; не биллинг DSH. Короткие запуски между scrape могут быть пропущены.",
+      "description": "Оценка Prometheus по счётчику llama.cpp; не биллинг DSH. Короткие запуски между scrape могут быть пропущены. «Из кеша» — токены, взятые из prompt cache / checkpoints без повторной обработки.",
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "Нет данных"
+          "noValue": "Нет данных",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
         },
         "overrides": []
       },
@@ -189,7 +199,14 @@
         {
           "refId": "A",
           "expr": "sum by(job)(increase(llamacpp:prompt_tokens_total{job=~\"${model:regex}\"}[$__range]))",
-          "legendFormat": "{{job}}",
+          "legendFormat": "{{job}} · всего",
+          "range": false,
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum by(job)(increase(llamacpp:prompt_tokens_cached_total{job=~\"${model:regex}\"}[$__range]))",
+          "legendFormat": "{{job}} · из кеша",
           "range": false,
           "instant": true
         }
@@ -204,7 +221,7 @@
         },
         "colorMode": "value",
         "graphMode": "none",
-        "textMode": "auto"
+        "textMode": "value_and_name"
       }
     },
     {
@@ -217,7 +234,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 4,
+        "y": 5,
         "w": 12,
         "h": 4
       },
@@ -225,7 +242,11 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "Нет данных"
+          "noValue": "Нет данных",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
         },
         "overrides": []
       },
@@ -248,7 +269,7 @@
         },
         "colorMode": "value",
         "graphMode": "none",
-        "textMode": "auto"
+        "textMode": "value_and_name"
       }
     },
     {
@@ -261,7 +282,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 8,
+        "y": 9,
         "w": 12,
         "h": 8
       },
@@ -306,7 +327,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 8,
+        "y": 9,
         "w": 12,
         "h": 8
       },
@@ -351,7 +372,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 16,
+        "y": 17,
         "w": 12,
         "h": 8
       },
@@ -396,7 +417,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 16,
+        "y": 17,
         "w": 12,
         "h": 8
       },
@@ -438,6 +459,185 @@
       }
     },
     {
+      "id": 21,
+      "title": "MTP: доля принятых черновых токенов",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Сколько токенов, предложенных MTP-головой (speculative decoding), подтвердила основная модель. Выше доля — выше ускорение. Нет данных: модель без MTP или не было генерации.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "Нет данных"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(job)(rate(llamacpp:spec_decode_num_accepted_tokens_total{job=~\"${model:regex}\"}[$__rate_interval])) / sum by(job)(rate(llamacpp:spec_decode_num_draft_tokens_total{job=~\"${model:regex}\"}[$__rate_interval]))",
+          "legendFormat": "{{job}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 22,
+      "title": "MTP за период",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 25,
+        "w": 6,
+        "h": 8
+      },
+      "description": "Доля принятых черновых токенов за выбранный период и среднее число принятых токенов на один черновик.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 0,
+          "noValue": "Нет данных",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(job)(increase(llamacpp:spec_decode_num_accepted_tokens_total{job=~\"${model:regex}\"}[$__range])) / sum by(job)(increase(llamacpp:spec_decode_num_draft_tokens_total{job=~\"${model:regex}\"}[$__range]))",
+          "legendFormat": "{{job}} · принято",
+          "range": false,
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum by(job)(increase(llamacpp:spec_decode_num_accepted_tokens_total{job=~\"${model:regex}\"}[$__range])) / sum by(job)(increase(llamacpp:spec_decode_num_drafts_total{job=~\"${model:regex}\"}[$__range]))",
+          "legendFormat": "{{job}} · ток/черновик",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "orientation": "horizontal",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 28
+        }
+      }
+    },
+    {
+      "id": 23,
+      "title": "Макс. контекст",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 25,
+        "w": 6,
+        "h": 8
+      },
+      "description": "llamacpp:n_tokens_max — максимум токенов в одном слоте с момента запуска сервиса (сбрасывается при перезапуске). Помогает подобрать --ctx-size и число слотов.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "Нет данных",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by(job)(llamacpp:n_tokens_max{job=~\"${model:regex}\"})",
+          "legendFormat": "{{job}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "orientation": "horizontal",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 28
+        }
+      }
+    },
+    {
       "id": 10,
       "title": "Свободная VRAM сейчас",
       "type": "stat",
@@ -447,7 +647,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 24,
+        "y": 33,
         "w": 12,
         "h": 5
       },
@@ -495,7 +695,10 @@
         },
         "colorMode": "value",
         "graphMode": "none",
-        "textMode": "auto"
+        "textMode": "auto",
+        "text": {
+          "titleSize": 13
+        }
       }
     },
     {
@@ -508,7 +711,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 24,
+        "y": 33,
         "w": 12,
         "h": 5
       },
@@ -539,7 +742,10 @@
         },
         "colorMode": "value",
         "graphMode": "none",
-        "textMode": "auto"
+        "textMode": "auto",
+        "text": {
+          "titleSize": 13
+        }
       }
     },
     {
@@ -552,7 +758,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 29,
+        "y": 38,
         "w": 12,
         "h": 8
       },
@@ -597,7 +803,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 29,
+        "y": 38,
         "w": 12,
         "h": 8
       },
@@ -642,7 +848,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 37,
+        "y": 46,
         "w": 12,
         "h": 8
       },
@@ -687,7 +893,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 37,
+        "y": 46,
         "w": 12,
         "h": 8
       },
@@ -732,7 +938,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 45,
+        "y": 54,
         "w": 12,
         "h": 8
       },
@@ -777,7 +983,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 45,
+        "y": 54,
         "w": 12,
         "h": 8
       },
@@ -822,7 +1028,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 53,
+        "y": 62,
         "w": 8,
         "h": 4
       },
@@ -866,7 +1072,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 53,
+        "y": 62,
         "w": 16,
         "h": 4
       },
@@ -906,13 +1112,13 @@
       "title": "Как читать показатели",
       "gridPos": {
         "x": 0,
-        "y": 57,
+        "y": 66,
         "w": 24,
         "h": 5
       },
       "options": {
         "mode": "markdown",
-        "content": "GPU-панели показывают всю нагрузку ПК и не фильтруются по модели. Выбор GPU — по стабильному UUID; в легендах также показано название карты.\n\nВ WSL2 некоторые показатели драйвера могут быть недоступны: «Нет данных» не означает нулевую нагрузку. Метрики токенов берутся из llama.cpp, а не из OpenTelemetry DSH. Неактивный профиль Qwen ожидаемо имеет доступность 0. После перезапуска счётчики сбрасываются; increase учитывает видимые сбросы, но не восстанавливает пропущенные измерения."
+        "content": "GPU-панели показывают всю нагрузку ПК и не фильтруются по модели. Выбор GPU — по стабильному UUID; в легендах также показано название карты.\n\nВ WSL2 некоторые показатели драйвера могут быть недоступны: «Нет данных» не означает нулевую нагрузку. Метрики токенов берутся из llama.cpp, а не из OpenTelemetry DSH. Профили qwen, qwen-mtp и bonsai-mtp взаимоисключающие: остановленные ожидаемо имеют доступность 0. Данные модели появляются с момента, когда Prometheus начал её опрашивать (job в prometheus.yaml); прошлые запросы не восстанавливаются. Панели MTP заполняются только у моделей со speculative decoding. После перезапуска счётчики сбрасываются; increase учитывает видимые сбросы, но не восстанавливает пропущенные измерения."
       }
     }
   ],
@@ -922,10 +1128,10 @@
         "name": "model",
         "label": "Модель / job",
         "type": "custom",
-        "query": "qwen",
+        "query": "qwen,qwen-mtp,bonsai-mtp",
         "multi": true,
         "includeAll": true,
-        "allValue": "qwen",
+        "allValue": "qwen|qwen-mtp|bonsai-mtp",
         "current": {
           "text": "All",
           "value": "$__all"
@@ -934,6 +1140,16 @@
           {
             "text": "qwen",
             "value": "qwen",
+            "selected": false
+          },
+          {
+            "text": "qwen-mtp",
+            "value": "qwen-mtp",
+            "selected": false
+          },
+          {
+            "text": "bonsai-mtp",
+            "value": "bonsai-mtp",
             "selected": false
           }
         ]

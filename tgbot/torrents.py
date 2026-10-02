@@ -94,3 +94,15 @@ class Torrents:
                                             headers=self.headers)
         self._check(response)
         return response.json()
+
+    async def pause(self, info_hash):
+        response = await self.client.post(f"{self.url}/api/torrents/{info_hash}/pause",
+                                          headers=self.headers)
+        self._check(response)
+        return response.json()
+
+    async def resume(self, info_hash):
+        response = await self.client.post(f"{self.url}/api/torrents/{info_hash}/resume",
+                                          headers=self.headers)
+        self._check(response)
+        return response.json()

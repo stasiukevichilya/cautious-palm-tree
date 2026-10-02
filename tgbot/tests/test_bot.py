@@ -17,7 +17,7 @@ from llm import LLM, Unavailable
 from market import Market
 from settings import Settings, mask_token
 from store import NotFound, Store
-from torrents import NotFound as TorrentNotFound, Timeout, magnet_hash
+from torrents import NotFound as TorrentNotFound, Timeout, TorrentError, magnet_hash
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = Path(os.getenv("TGBOT_WORKFLOWS", ROOT.parent / "qwen-image" / "workflows"))
@@ -73,10 +73,13 @@ class FakeOut:
 class FakeTorrents:
     def __init__(self):
         self.metadata_calls, self.start_calls, self.remove_calls = [], [], []
+        self.pause_calls, self.resume_calls = [], []
         self.meta = {}
         self.rows = []
         self.fail = None        # exception raised by metadata() and start()
         self.remove_fail = None  # exception raised by remove()
+        self.pause_fail = None   # exception raised by pause()
+        self.resume_fail = None  # exception raised by resume()
 
     async def metadata(self, magnet):
         self.metadata_calls.append(magnet)
@@ -98,6 +101,22 @@ class FakeTorrents:
         if self.remove_fail:
             raise self.remove_fail
         return {"ok": True}
+
+    def _row(self, key):
+        row = next((r for r in self.rows if r["info_hash"] == key), None)
+        return {"info_hash": key, "name": row["name"] if row else ""}
+
+    async def pause(self, key):
+        self.pause_calls.append(key)
+        if self.pause_fail:
+            raise self.pause_fail
+        return self._row(key)
+
+    async def resume(self, key):
+        self.resume_calls.append(key)
+        if self.resume_fail:
+            raise self.resume_fail
+        return self._row(key)
 
 
 class FakeMarket:
@@ -459,13 +478,22 @@ class MagnetTests(Async):
     async def test_torrent_list(self):
         await self.allow(ADMIN)
         self.torrents.rows = [
-            {"info_hash": "b" * 40, "name": "a.iso", "state": "downloading", "progress": 0.5, "size": 10},
-            {"info_hash": "c" * 40, "name": "b.zip", "state": "seeding", "progress": 1.0, "size": 10},
+            {"info_hash": "b" * 40, "name": "a.iso", "state": "downloading", "progress": 0.5,
+             "download_speed": 1.2 * 1024 ** 2, "size": 10},
+            {"info_hash": "c" * 40, "name": "b.zip", "state": "seeding", "progress": 1.0,
+             "upload_speed": 300 * 1024, "size": 10},
+            {"info_hash": "d" * 40, "name": "c.iso", "state": "paused", "progress": 0.25, "size": 10},
         ]
         reply = await self.service.torrent_list(ADMIN)
         self.assertIn("⬇", reply.text)
         self.assertIn("50%", reply.text)
+        self.assertIn("1.2 МБ/с", reply.text)
         self.assertIn("↥", reply.text)
+        self.assertIn("300.0 КБ/с", reply.text)
+        self.assertIn("⏸", reply.text)
+        self.assertIn("b" * 40, reply.text)  # the full hash is copyable for /torrent-del
+        self.assertIn("<code>" + "b" * 40 + "</code>", reply.text)  # hash is a copyable code entity
+        self.assertTrue(reply.html)
 
     async def test_torrent_list_empty_and_down(self):
         await self.allow(ADMIN)
@@ -481,6 +509,43 @@ class MagnetTests(Async):
         self.assertIn("hash", (await self.service.torrent_delete(ADMIN, "nope")).text)
         self.torrents.remove_fail = TorrentNotFound("Загрузка не найдена.")
         self.assertIn("не найдена", (await self.service.torrent_delete(ADMIN, "c" * 40)).text)
+
+    async def test_torrent_hash_prefix(self):
+        await self.allow(ADMIN)
+        first = "aa" + "1" * 38
+        second = "aa" + "1" * 30 + "2" * 8
+        self.torrents.rows = [
+            {"info_hash": first, "name": "one", "state": "downloading", "progress": 0.1},
+            {"info_hash": second, "name": "two", "state": "downloading", "progress": 0.2},
+        ]
+        # a shared prefix is ambiguous
+        self.assertIn("неоднозначно", (await self.service.torrent_delete(ADMIN, "aa" + "1" * 10)).text)
+        self.assertEqual(self.torrents.remove_calls, [])
+        # a unique prefix resolves to the full hash
+        self.torrents.rows = [self.torrents.rows[0]]
+        reply = await self.service.torrent_delete(ADMIN, "aa" + "1" * 5)
+        self.assertIn("убрана", reply.text)
+        self.assertEqual(self.torrents.remove_calls, [first])
+        # an unknown prefix is a lookup miss, not a service error
+        self.assertIn("не найдена", (await self.service.torrent_delete(ADMIN, "f" * 8)).text)
+
+    async def test_torrent_pause_resume(self):
+        await self.allow(ADMIN)
+        self.torrents.rows = [
+            {"info_hash": "b" * 40, "name": "a.iso", "state": "downloading", "progress": 0.5},
+        ]
+        reply = await self.service.torrent_pause(ADMIN, "b" * 40)
+        self.assertIn("на паузе", reply.text)
+        self.assertIn("/torrent-resume " + "b" * 12, reply.text)
+        self.assertEqual(self.torrents.pause_calls, ["b" * 40])
+        reply = await self.service.torrent_resume(ADMIN, "b" * 40)
+        self.assertIn("продолжается", reply.text)
+        self.assertEqual(self.torrents.resume_calls, ["b" * 40])
+        # a wrong state comes back as a service error text
+        self.torrents.pause_fail = TorrentError("Загрузка не активна (состояние: paused).")
+        self.assertIn("не активна", (await self.service.torrent_pause(ADMIN, "b" * 40)).text)
+        self.torrents.resume_fail = TorrentError("Загрузка не на паузе (состояние: downloading).")
+        self.assertIn("не на паузе", (await self.service.torrent_resume(ADMIN, "b" * 40)).text)
 
 
 class MarketClientTests(Async):

@@ -216,6 +216,8 @@ services:
       - ${QWEN_TENSOR_SPLIT:-0.57,0.43}
       - --ctx-size
       - ${QWEN_CTX_SIZE:-196608}
+      - --spec-draft-n-max
+      - '2'
       - --parallel
       - '1'
       - --flash-attn
@@ -240,33 +242,143 @@ services:
       - --metrics
       - --sleep-idle-seconds
       - '-1'
-  dsh:
+  qwen-mtp:
+    # Same model class as qwen, but the RVN Q4_K_M multilingual build with the
+    # embedded MTP head (speculative decoding). Uses its own QWEN_MTP_* variables
+    # and a smaller context to leave VRAM for the MTP draft context.
     <<: *common
-    build:
-      context: ./dsh
-      args:
-        NODE_IMAGE: ${NODE_IMAGE:-node:24-bookworm-slim}
-        DSH_VERSION: ${DSH_VERSION:?Run bash prepare.sh first}
-    image: local/ml-dsh:${DSH_VERSION}
-    init: true
+    profiles: ["qwen-mtp"]
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    gpus: all
     environment:
-      DSH_HOME: /home/node/.dsh
-      OTEL_SERVICE_NAME: dsh-agent
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel:4318
+      CUDA_VISIBLE_DEVICES: ${QWEN_MTP_CUDA_VISIBLE_DEVICES:-${CUDA_VISIBLE_DEVICES:-0,1}}
     volumes:
-      - dsh-data:/home/node/.dsh
-      - ./workspace:/workspace
-    working_dir: /workspace
+      - ./models:/models:ro
     ports:
-      - 127.0.0.1:3080:3081
-    command: [dsh, web, --no-open, --host, 127.0.0.1, --port, '3080']
-    depends_on: [otel]
-  dsh-forward:
+      - 127.0.0.1:8081:8080
+    command:
+      - --model
+      - /models/${QWEN_MTP_MODEL_FILE:-RVN-Q4_K_M-multilingual-mtp.gguf}
+      - --alias
+      - qwen3.8-27b-mtp
+      - --host
+      - 0.0.0.0
+      - --port
+      - '8080'
+      - --device
+      - CUDA0,CUDA1
+      - --gpu-layers
+      - all
+      - --override-tensor
+      - 'token_embd\.weight=CUDA0'
+      - --fit
+      - 'off'
+      - --split-mode
+      - layer
+      - --tensor-split
+      - ${QWEN_MTP_TENSOR_SPLIT:-0.57,0.43}
+      - --ctx-size
+      - ${QWEN_MTP_CTX_SIZE:-131072}
+      - --spec-type
+      - draft-mtp
+      - --spec-draft-n-max
+      - ${QWEN_MTP_SPEC_DRAFT_N_MAX:-2}
+      - --parallel
+      - '1'
+      - --flash-attn
+      - 'on'
+      - --cache-type-k
+      - q8_0
+      - --cache-type-v
+      - q8_0
+      - --cache-ram
+      - '0'
+      - --ctx-checkpoints
+      - '0'
+      - --batch-size
+      - '2048'
+      - --ubatch-size
+      - ${QWEN_MTP_UBATCH_SIZE:-512}
+      - --threads
+      - '4'
+      - --poll
+      - '0'
+      - --jinja
+      - --metrics
+      - --sleep-idle-seconds
+      - '-1'
+  bonsai-mtp:
+    # Ternary-Bonsai-2-27B Uncensored (qwen35 hybrid, PQ2_0 ternary + MTP head).
+    # Needs the PrismML llama.cpp fork, so it has its own image; see bonsai/Dockerfile.
+    # ~8.1 GB of weights leave room for the native 256k context shared by all slots
+    # (--kv-unified). Measured on 4070 Ti S + 3080 Ti: MTP n-max 2 beats 3 and 4;
+    # 0.6,0.4 keeps >=1.2 GB free per GPU even with 4 slots; ubatch 1024 does not fit
+    # at 256k. Single 3080 Ti is faster (BONSAI_MTP_CUDA_VISIBLE_DEVICES=1,
+    # BONSAI_MTP_DEVICE=CUDA0, BONSAI_MTP_CTX_SIZE=65536, BONSAI_MTP_PARALLEL=1).
     <<: *common
-    image: ${SOCAT_IMAGE:-alpine/socat:latest}
-    network_mode: service:dsh
-    command: ['TCP-LISTEN:3081,fork,reuseaddr,bind=0.0.0.0', 'TCP:127.0.0.1:3080']
-    depends_on: [dsh]
+    profiles: ["bonsai-mtp"]
+    build:
+      context: ./bonsai
+    image: local/ml-bonsai:1
+    gpus: all
+    environment:
+      CUDA_VISIBLE_DEVICES: ${BONSAI_MTP_CUDA_VISIBLE_DEVICES:-${CUDA_VISIBLE_DEVICES:-0,1}}
+    volumes:
+      - ./models:/models:ro
+    ports:
+      - 127.0.0.1:8089:8080
+    command:
+      - --model
+      - /models/${BONSAI_MTP_MODEL_FILE:-Ternary-Bonsai-2-27B-Uncensored-Gaston-PQ2_0-MTP.gguf}
+      - --alias
+      - bonsai2-27b-uc-mtp
+      - --device
+      - ${BONSAI_MTP_DEVICE:-CUDA0,CUDA1}
+      - --gpu-layers
+      - all
+      - --override-tensor
+      - 'token_embd\.weight=CUDA0'
+      - --fit
+      - 'off'
+      - --split-mode
+      - layer
+      - --tensor-split
+      - ${BONSAI_MTP_TENSOR_SPLIT:-0.6,0.4}
+      - --ctx-size
+      - ${BONSAI_MTP_CTX_SIZE:-262144}
+      - --parallel
+      - ${BONSAI_MTP_PARALLEL:-2}
+      - --kv-unified
+      - --spec-type
+      - draft-mtp
+      - --spec-draft-n-max
+      - ${BONSAI_MTP_SPEC_DRAFT_N_MAX:-2}
+      - --flash-attn
+      - 'on'
+      - --cache-type-k
+      - q8_0
+      - --cache-type-v
+      - q8_0
+      - --cache-type-k-draft
+      - q8_0
+      - --cache-type-v-draft
+      - q8_0
+      - --cache-ram
+      - ${BONSAI_MTP_CACHE_RAM:-4096}
+      - --ctx-checkpoints
+      - ${BONSAI_MTP_CTX_CHECKPOINTS:-8}
+      - --batch-size
+      - '2048'
+      - --ubatch-size
+      - ${BONSAI_MTP_UBATCH_SIZE:-512}
+      - --threads
+      - '4'
+      - --poll
+      - '0'
+      - --jinja
+      - --metrics
+      - --sleep-idle-seconds
+      - '-1'
   gpu-exporter:
     <<: *common
     image: ${GPU_IMAGE:-utkuozdemir/nvidia_gpu_exporter:latest}
@@ -371,7 +483,6 @@ networks:
   default:
   qwen-image-uc:
 volumes:
-  dsh-data:
   prometheus-data:
   tempo-data:
   grafana-data:

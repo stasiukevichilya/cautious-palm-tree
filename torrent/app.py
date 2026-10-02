@@ -95,4 +95,22 @@ def create_app(settings=None):
             raise HTTPException(404, "Torrent not found in queue")
         return {"ok": True}
 
+    @app.post("/api/torrents/{info_hash}/pause", dependencies=[Depends(authorized)])
+    def pause(info_hash: str):
+        try:
+            return engine.pause(info_hash)
+        except KeyError:
+            raise HTTPException(404, "Torrent not found in queue")
+        except ValueError as error:
+            raise HTTPException(400, str(error))
+
+    @app.post("/api/torrents/{info_hash}/resume", dependencies=[Depends(authorized)])
+    def resume(info_hash: str):
+        try:
+            return engine.resume(info_hash)
+        except KeyError:
+            raise HTTPException(404, "Torrent not found in queue")
+        except ValueError as error:
+            raise HTTPException(400, str(error))
+
     return app
