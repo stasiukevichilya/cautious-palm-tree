@@ -5,7 +5,8 @@ ComfyUI и HTTP API. [Подготовка и запуск](QWEN-IMAGE-RU.md): `
 интерфейс http://127.0.0.1:8083. Вариант с DiT unsloth Q8_0: `make qwen-image-unsloth`.
 
 Qwen-Image 2.1 Uncensored: отдельный сервис на одной GPU, недоступный боту:
-[QWEN-IMAGE-UC-RU.md](QWEN-IMAGE-UC-RU.md), `make qwen-image-uc`, интерфейс http://127.0.0.1:8085.
+[QWEN-IMAGE-UC-RU.md](QWEN-IMAGE-UC-RU.md), `make qwen-image-uc`, интерфейс http://127.0.0.1:8085;
+`make uc-bonsai` — вместе с bonsai-mtp на двух GPU без CPU-offload.
 
 Telegram-бот для запущенной LLM и генераторов изображений: [TGBOT-RU.md](TGBOT-RU.md),
 `make tgbot`, настройки http://127.0.0.1:8084.

@@ -2,6 +2,7 @@ import argparse
 import copy
 import io
 import json
+import os
 import random
 import time
 import urllib.parse
@@ -35,6 +36,7 @@ def main():
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.load(response)
 
+    encoder = "cuda:1" if (os.getenv("QWEN_IMAGE_UC_ENCODER_DEVICE") or "cpu") == "gpu" else "cpu"
     workflow = json.loads(Path("/opt/qwen-image-uc/workflows/qwen-image21-uc.api.json").read_text())
     reports = []
     for index in range(args.count):
@@ -62,12 +64,13 @@ def main():
             raise RuntimeError("Invalid image size or uniform output")
         gpu = call("/local-qwen-image-uc/devices")
         placement = {name: model["devices"] for name, model in gpu["models"].items()}
-        if len(placement) != 3 or sorted(sum(placement.values(), [])) != ["cpu", "cuda:0", "cuda:0"]:
-            raise RuntimeError(f"Expected DiT and VAE on cuda:0, text encoder on cpu: {gpu}")
+        if len(placement) != 3 or sorted(sum(placement.values(), [])) != sorted(["cuda:0", "cuda:0", encoder]):
+            raise RuntimeError(f"Expected DiT and VAE on cuda:0, text encoder on {encoder}: {gpu}")
         for model in gpu["models"].values():
             if model["devices"] != [model["expected"]]:
                 raise RuntimeError(f"Unexpected placement: {model}")
-        if gpu["memory"]["free_bytes"] < 1024**3:
+        # With the encoder on GPU the free VRAM belongs to bonsai-mtp; fixed caps keep the services apart.
+        if encoder == "cpu" and gpu["memory"]["free_bytes"] < 1024**3:
             raise RuntimeError(f"Less than 1 GiB VRAM remains: {gpu}")
         report = {"id": identifier, "size": size, "seconds": time.monotonic() - started, "image": image_info,
                   "gpu": gpu, "system": call("/system_stats")}

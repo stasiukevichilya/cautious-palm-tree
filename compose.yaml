@@ -46,10 +46,15 @@ services:
     user: "${QWEN_IMAGE_UID:-${SDXL_UID:-1000}}:${QWEN_IMAGE_GID:-${SDXL_GID:-1000}}"
     stop_grace_period: 75s
     environment:
-      CUDA_VISIBLE_DEVICES: ${QWEN_IMAGE_UC_GPU:-${QWEN_IMAGE_GPU0:-${SDXL_GPU0:-0}}}
-      NVIDIA_VISIBLE_DEVICES: ${QWEN_IMAGE_UC_GPU:-${QWEN_IMAGE_GPU0:-${SDXL_GPU0:-0}}}
+      # QWEN_IMAGE_UC_SHARED=1 (make uc-bonsai): text encoder on the second GPU instead of the CPU and fixed
+      # VRAM caps on both GPUs, so bonsai-mtp fits next to it. See QWEN-IMAGE-UC-RU.md.
+      CUDA_VISIBLE_DEVICES: ${QWEN_IMAGE_UC_GPU:-${QWEN_IMAGE_GPU0:-${SDXL_GPU0:-0}}}${QWEN_IMAGE_UC_SHARED:+,${QWEN_IMAGE_UC_ENCODER_GPU:-${QWEN_IMAGE_GPU1:-${SDXL_GPU1:-1}}}}
+      NVIDIA_VISIBLE_DEVICES: ${QWEN_IMAGE_UC_GPU:-${QWEN_IMAGE_GPU0:-${SDXL_GPU0:-0}}}${QWEN_IMAGE_UC_SHARED:+,${QWEN_IMAGE_UC_ENCODER_GPU:-${QWEN_IMAGE_GPU1:-${SDXL_GPU1:-1}}}}
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       QWEN_IMAGE_UC_VRAM_RESERVE_GIB: ${QWEN_IMAGE_UC_VRAM_RESERVE_GIB:-1.5}
+      QWEN_IMAGE_UC_ENCODER_DEVICE: ${QWEN_IMAGE_UC_SHARED:+gpu}
+      QWEN_IMAGE_UC_VRAM_GIB: ${QWEN_IMAGE_UC_SHARED:+${QWEN_IMAGE_UC_VRAM_GIB:-7.25}}
+      QWEN_IMAGE_UC_ENCODER_VRAM_GIB: ${QWEN_IMAGE_UC_ENCODER_VRAM_GIB:-7.75}
     gpus: all
     # Own network only: other services (the Telegram bot included) cannot resolve or reach it.
     networks: [qwen-image-uc]

@@ -74,16 +74,26 @@ class PlacementTests(unittest.TestCase):
         self.mm.load_models_gpu = Mock()
         comfy = types.ModuleType("comfy")
         comfy.model_management = self.mm
+        self.sd = Mock()
+        comfy.sd = self.sd
         routes = types.SimpleNamespace(get=lambda path: lambda fn: fn)
         self.nodes = Mock()
         modules = {"torch": self.torch, "nodes": self.nodes, "comfy": comfy, "comfy.model_management": self.mm,
+                   "comfy.sd": self.sd, "folder_paths": Mock(),
                    "comfy.cli_args": types.SimpleNamespace(args=self.args),
                    "aiohttp": types.SimpleNamespace(web=Mock()),
                    "server": types.SimpleNamespace(PromptServer=types.SimpleNamespace(
                        instance=types.SimpleNamespace(routes=routes))),
                    "prometheus_client": MetricsTests.fake_prometheus_client()}
+        self.modules = modules
         with patch.dict(sys.modules, modules):
             self.module = load("local_qwen_uc", ROOT / "local_nodes/__init__.py")
+
+    def load_shared(self):
+        """The module as configured by make uc-bonsai: encoder on the second GPU."""
+        self.torch.cuda.device_count.return_value = 2
+        with patch.dict(sys.modules, self.modules), patch.dict("os.environ", {"QWEN_IMAGE_UC_ENCODER_DEVICE": "gpu"}):
+            return load("local_qwen_uc_shared", ROOT / "local_nodes/__init__.py")
 
     def patcher(self, devices, load_device="cuda:0"):
         model = Mock()
@@ -113,11 +123,40 @@ class PlacementTests(unittest.TestCase):
     def test_encoder_must_be_fully_on_cpu(self):
         clip = types.SimpleNamespace(patcher=self.patcher(["cpu"], load_device="cpu"))
         self.nodes.CLIPLoader.return_value.load_clip.return_value = (clip,)
-        self.assertEqual(self.module.QwenImageUCEncoderCPU().load("te.safetensors"), (clip,))
+        self.assertEqual(self.module.QwenImageUCEncoder().load("te.safetensors"), (clip,))
         self.nodes.CLIPLoader.return_value.load_clip.assert_called_with("te.safetensors", "qwen_image", device="cpu")
         clip.patcher.model.parameters.return_value.append(types.SimpleNamespace(device="cuda:0"))
         with self.assertRaisesRegex(RuntimeError, "not entirely on cpu"):
-            self.module.QwenImageUCEncoderCPU().load("te.safetensors")
+            self.module.QwenImageUCEncoder().load("te.safetensors")
+        # Workflows saved before the placement became configurable keep working.
+        self.assertIs(self.module.NODE_CLASS_MAPPINGS["QwenImageUCEncoderCPU"], self.module.QwenImageUCEncoder)
+
+    def test_shared_mode_puts_encoder_on_second_gpu_without_unused_parts(self):
+        module = self.load_shared()
+        module.require_mode()
+        self.torch.cuda.device_count.return_value = 1
+        with self.assertRaises(RuntimeError):
+            module.require_mode()
+        self.torch.cuda.device_count.return_value = 2
+        encoder = types.SimpleNamespace(lm_head=object(), visual=object(), layers=object())
+        model = Mock()
+        model.named_modules.return_value = [("", model), ("qwen3vl_8b.transformer", encoder),
+                                            ("qwen3vl_8b.transformer.lm_head", encoder.lm_head),
+                                            ("qwen3vl_8b.transformer.visual", encoder.visual)]
+        model.get_submodule.return_value = encoder
+        clip = types.SimpleNamespace(cond_stage_model=model, patcher=self.patcher(["cuda:1"], load_device="cuda:1"))
+        clip.patcher.size = 123
+        self.sd.load_clip.return_value = clip
+        self.assertEqual(module.QwenImageUCEncoder().load("te.safetensors"), (clip,))
+        options = self.sd.load_clip.call_args.kwargs["model_options"]
+        self.assertEqual((options["load_device"], options["offload_device"], options["initial_device"]),
+                         ("cuda:1", "cuda:1", "cpu"))
+        self.assertEqual((encoder.lm_head, encoder.visual, clip.patcher.size), (None, None, 0))
+        self.assertIsNotNone(encoder.layers)
+        self.mm.load_models_gpu.assert_called_with([clip.patcher], force_full_load=True)
+        clip.patcher.model.parameters.return_value.append(types.SimpleNamespace(device="cpu"))
+        with self.assertRaisesRegex(RuntimeError, "not entirely on cuda:1"):
+            module.QwenImageUCEncoder().load("te.safetensors")
 
     def test_ui_offers_only_pinned_files(self):
         manifest = ROOT / "models.json"
@@ -222,6 +261,7 @@ class MetricsTests(unittest.TestCase):
         comfy.model_management = self.mm
         routes = types.SimpleNamespace(get=lambda path: lambda fn: fn)
         modules = {"torch": self.torch, "nodes": Mock(), "comfy": comfy, "comfy.model_management": self.mm,
+                   "comfy.sd": Mock(), "folder_paths": Mock(),
                    "comfy.cli_args": types.SimpleNamespace(args=self.args),
                    "aiohttp": types.SimpleNamespace(web=Mock()),
                    "server": types.SimpleNamespace(PromptServer=types.SimpleNamespace(

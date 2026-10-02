@@ -10,7 +10,7 @@ SDXL_COMPOSE := $(COMPOSE) -f compose.yaml -f compose.sdxl-dual.yaml
 QWEN_IMAGE_DIT ?= base
 
 .PHONY: help infra qwen qwen-mtp bonsai-mtp bonsai-mtp-build sdxl sdxl-dual sdxl-build sdxl-download sdxl-test models-stop status logs-qwen logs-qwen-mtp logs-bonsai-mtp logs-sdxl stop down
-.PHONY: qwen-image-uc qwen-image-uc-build qwen-image-uc-download qwen-image-uc-test qwen-image-uc-browser-test logs-qwen-image-uc
+.PHONY: uc-bonsai qwen-image-uc qwen-image-uc-build qwen-image-uc-download qwen-image-uc-test qwen-image-uc-browser-test logs-qwen-image-uc
 .PHONY: tgbot tgbot-build tgbot-key tgbot-test tgbot-browser-test logs-tgbot
 .PHONY: scraper scraper-build scraper-test logs-scraper
 .PHONY: torrent torrent-build torrent-test logs-torrent
@@ -19,6 +19,7 @@ QWEN_IMAGE_DIT ?= base
 help:
 	@echo "make qwen-image-uc - Qwen-Image 2.1 Uncensored, one GPU + CPU text encoder, UI :8085 (not in the bot)"
 	@echo "make qwen-image-uc-build / qwen-image-uc-download / qwen-image-uc-test / qwen-image-uc-browser-test"
+	@echo "make uc-bonsai - qwen-image-uc (encoder on GPU1) + bonsai-mtp (24k ctx) together, no CPU offload"
 	@echo "make tgbot       - Telegram bot for the running LLM / image model, settings UI :8084"
 	@echo "make tgbot-key / tgbot-build / tgbot-test / tgbot-browser-test / logs-tgbot"
 	@echo "make scraper     - мониторинг БУ-объявлений (Kufar, Onliner), алерты в бота, API :8086"
@@ -103,6 +104,16 @@ qwen-image-uc: infra
 	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp sdxl qwen-image
 	$(COMPOSE) --profile qwen-image-uc up -d --no-deps qwen-image-uc
 	@echo "Qwen-Image UC: http://127.0.0.1:8085"
+
+# Both services on both GPUs, everything resident in VRAM; measured budget in QWEN-IMAGE-UC-RU.md.
+UC_BONSAI_ENV := QWEN_IMAGE_UC_SHARED=1 BONSAI_MTP_CTX_SIZE=24576 BONSAI_MTP_PARALLEL=1 \
+	BONSAI_MTP_TENSOR_SPLIT=0.72,0.28 BONSAI_MTP_UBATCH_SIZE=256
+
+uc-bonsai: infra
+	mkdir -p outputs/qwen-image-uc
+	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp sdxl qwen-image
+	$(UC_BONSAI_ENV) $(COMPOSE) --profile qwen-image-uc --profile bonsai-mtp up -d --no-deps qwen-image-uc bonsai-mtp
+	@echo "Qwen-Image UC: http://127.0.0.1:8085, Bonsai MTP: http://127.0.0.1:8089"
 
 qwen-image-uc-test:
 	python3 -m unittest discover -s qwen-image-uc/tests -v
