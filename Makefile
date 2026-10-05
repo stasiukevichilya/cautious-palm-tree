@@ -6,6 +6,8 @@
 COMPOSE := docker compose
 INFRA := prometheus grafana tempo otel gpu-exporter loki alloy
 MODEL_PROFILES := --profile qwen --profile qwen-mtp --profile bonsai-mtp --profile sdxl --profile qwen-image --profile qwen-image-uc
+# GID of the Docker socket, so PI WEB agents can drive the host Docker.
+export PIWEB_DOCKER_GID ?= $(shell stat -c %g /var/run/docker.sock 2>/dev/null || echo 0)
 SDXL_COMPOSE := $(COMPOSE) -f compose.yaml -f compose.sdxl-dual.yaml
 QWEN_IMAGE_DIT ?= base
 
@@ -14,6 +16,7 @@ QWEN_IMAGE_DIT ?= base
 .PHONY: tgbot tgbot-build tgbot-key tgbot-test tgbot-browser-test logs-tgbot
 .PHONY: scraper scraper-build scraper-test logs-scraper
 .PHONY: torrent torrent-build torrent-test logs-torrent
+.PHONY: piweb piweb-build piweb-stop logs-piweb
 .PHONY: qwen-image qwen-image-build qwen-image-download qwen-image-download-unsloth qwen-image-unsloth qwen-image-test qwen-image-browser-test logs-qwen-image
 
 help:
@@ -26,6 +29,8 @@ help:
 	@echo "make scraper-build / scraper-test / logs-scraper"
 	@echo "make torrent     - скачивание по magnet из бота (/magnet), API :8087"
 	@echo "make torrent-build / torrent-test / logs-torrent"
+	@echo "make piweb       - PI WEB (Pi Coding Agent) на локальных LLM, UI :8504; модель поднимать отдельно"
+	@echo "make piweb-build / piweb-stop / logs-piweb"
 	@echo "make qwen-image  - Qwen-Image 2.1 on two GPUs, API/UI :8083"
 	@echo "make qwen-image-build / qwen-image-download / qwen-image-test / qwen-image-browser-test"
 	@echo "make qwen-image-unsloth - the same with unsloth Q8_0 DiT (make qwen-image-download-unsloth first)"
@@ -195,6 +200,22 @@ torrent-test:
 logs-torrent:
 	$(COMPOSE) logs --tail=100 -f torrent
 
+piweb-build:
+	$(COMPOSE) --profile piweb build piweb-sessiond
+
+# Не модель: переключение моделей и models-stop оставляют его работать.
+piweb: infra
+	mkdir -p outputs/piweb/data outputs/piweb/workspace
+	$(COMPOSE) --profile piweb up -d --no-deps piweb-sessiond piweb
+	@echo "PI WEB: http://127.0.0.1:8504 (модель: make qwen / qwen-mtp / bonsai-mtp)"
+
+# Остановка sessiond прерывает активные сессии агента.
+piweb-stop:
+	$(COMPOSE) --profile piweb stop piweb piweb-sessiond
+
+logs-piweb:
+	$(COMPOSE) --profile piweb logs --tail=100 -f piweb-sessiond piweb
+
 qwen-image-build:
 	$(COMPOSE) --profile qwen-image build qwen-image
 
@@ -231,7 +252,7 @@ models-stop:
 	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp sdxl qwen-image qwen-image-uc
 
 status:
-	$(COMPOSE) $(MODEL_PROFILES) ps -a
+	$(COMPOSE) $(MODEL_PROFILES) --profile piweb ps -a
 
 logs-qwen:
 	$(COMPOSE) logs --tail=100 -f qwen
@@ -249,7 +270,7 @@ logs-qwen-image:
 	$(COMPOSE) logs --tail=100 -f qwen-image
 
 stop:
-	$(COMPOSE) $(MODEL_PROFILES) stop -t 75
+	$(COMPOSE) $(MODEL_PROFILES) --profile piweb stop -t 75
 
 down:
-	$(COMPOSE) $(MODEL_PROFILES) down
+	$(COMPOSE) $(MODEL_PROFILES) --profile piweb down

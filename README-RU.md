@@ -30,6 +30,11 @@ Telegram-бот для запущенной LLM и генераторов изо
 `make torrent`, API http://127.0.0.1:8087 (Bearer TGBOT_ADMIN_KEY). Отключается
 `TGBOT_TORRENT_URL=` в .env. Метрики — в dashboard «Torrent downloads» Grafana.
 
+PI WEB — веб-интерфейс Pi Coding Agent на локальных LLM (qwen, qwen-mtp, bonsai-mtp):
+[PIWEB-RU.md](PIWEB-RU.md), `make piweb`, интерфейс http://127.0.0.1:8504. Агенту
+доступны `outputs/piweb/workspace`, проекты из `PIWEB_PROJECTS` (по умолчанию `~/git`)
+и Docker хоста.
+
 SDXL Base 1.0: отдельный профиль генерации изображений с HTTP API и веб-интерфейсом.
 Подготовка, режимы одной/двух GPU и проверки: [SDXL-RU.md](SDXL-RU.md).
 Запуск после подготовки: `make sdxl`, интерфейс http://127.0.0.1:8082.
@@ -40,11 +45,33 @@ llama.cpp, поэтому у него свой образ `bonsai/Dockerfile` (`
 переменные `BONSAI_MTP_*` (модель, GPU, split, контекст, слоты, MTP, ubatch, кеши) в compose.yaml.
 Текущий порт Grafana: http://127.0.0.1:3055.
 
-Рекомендуемый старт: Unsloth UD-Q4_K_M, контекст 131072, K/V q8_0, один слот, layer split 0.57/0.43. Только текст; mmproj и speculative/MTP не загружаются. Это расчетная конфигурация, которую нужно принять по результатам проверки на вашем ПК. Здесь проверен синтаксис Compose и Python; запуск модели и совместимость контейнеров на GPU не проверялись.
+Текущая конфигурация `qwen`: Qwen3.8-27B Q4_K_M, контекст 196608, K/V q8_0, один слот, layer split 0.60/0.40, ubatch 256, MTP-спекуляция (`--spec-type draft-mtp`, 2 черновых токена; MTP-голова `blk.64.nextn` есть и в Uncensored, и в UD-файле), prompt cache в RAM 4 GiB и 8 context checkpoints. Только текст, mmproj не загружается.
+
+Замер `python3 bench-qwen.py` (чат-запрос «ревью кода», temperature 0, 768 токенов; 4070 Ti SUPER + 3080 Ti, 03.10.2026):
+
+| Промпт | Генерация без MTP | С MTP (n=2) | Prefill без MTP → с MTP |
+|---:|---:|---:|---:|
+| 1k | 28.1 t/s | 42.5 t/s (+51%) | 557 → 472 t/s |
+| 32k | 23.1 t/s | 41.3 t/s (+79%) | 1189 → 1014 t/s |
+| 64k | 18.7 t/s | 32.7 t/s (+75%) | 1062 → 901 t/s |
+| 120k | 13.5 t/s | 28.1 t/s (+108%) | 885 → 749 t/s |
+
+Доля принятых черновых токенов 68–82%. Спекуляция не меняет распределение модели (каждый черновой токен проверяет основная модель), но жадный вывод не побайтово совпадает с режимом без MTP: пакетная проверка дает другие округления, и тексты расходятся через сотни символов. MTP-контексту нужно ~1.3 GiB на CUDA1 (KV 408 MiB + compute ~0.9 GiB), поэтому ubatch уменьшен до 256 и split сдвинут на CUDA0; свободно ~0.55 GiB на каждой GPU. n=3 быстрее только на длинном контексте и съедает запас VRAM. Отключить MTP: `QWEN_SPEC_TYPE=none` в .env (тогда можно вернуть QWEN_UBATCH_SIZE=512 и split 0.57,0.43).
+
+Конфигурация `qwen-mtp` (RVN Q4_K_M multilingual + MTP): контекст 163840 целиком в VRAM, K/V и K/V черновика q8_0, ubatch 256, split 0.60/0.40, prompt cache 4 GiB и 8 checkpoints. Контекст выбран с запасом ~1 GiB на каждой GPU. Максимум — 196608 при split 0.62/0.38 (MTP-голова и ее compute-буфер ~0.9 GiB на CUDA1), но тогда на пике свободно лишь ~0.36 / 0.58 GiB. При 0.57/0.43 и ubatch 512 MTP-контекст не создается (OOM на CUDA1). Замер `python3 bench-qwen.py --url http://127.0.0.1:8081` (05.10.2026):
+
+| Промпт | Prefill | Генерация n=2 | Свободно CUDA0 / CUDA1 (пик) |
+|---:|---:|---:|---:|
+| 1k | 890 t/s | 67.3 t/s | 1033 / 1094 MiB |
+| 64k | 1367 t/s | 40.1 t/s | 1117 / 1094 MiB |
+| 120k | 1125 t/s | 32.4 t/s | 1274 / 1094 MiB |
+| 160k | 988 t/s | 24.0 t/s | 1043 / 1094 MiB |
+
+По умолчанию n=2 (`QWEN_MTP_SPEC_DRAFT_N_MAX`). При 196608 n=3 давал на 1k 53.1 против 64.7 t/s, на 120k 37.2 против 32.4 t/s: для работы преимущественно с длинным контекстом можно поставить 3.
 
 1. Память и ограничения
 
-Нельзя обеспечить нулевое потребление CPU/RAM. Токенизация, sampling, CUDA-драйвер, сетевые буферы, Docker, harness, его команды и мониторинг используют процессор и системную память. Цель — разместить веса, KV и recurrent state в VRAM без CPU-offload больших слоев. CUDA-передачи между картами в WSL также могут использовать RAM. Планируйте несколько GiB RAM для сервисов и дополнительную память при загрузке; жесткий лимит без знания вашего объема RAM не задан.
+Нельзя обеспечить нулевое потребление CPU/RAM. Токенизация, sampling, CUDA-драйвер, сетевые буферы, Docker и мониторинг используют процессор и системную память. Цель — разместить веса, KV и recurrent state в VRAM без CPU-offload больших слоев. CUDA-передачи между картами в WSL также могут использовать RAM. Планируйте несколько GiB RAM для сервисов и дополнительную память при загрузке; жесткий лимит без знания вашего объема RAM не задан.
 
 По config.json: 64 слоя, из них 16 full-attention, 4 KV heads, head_dim=256. Оценка attention KV: C × 16 × 2 × 4 × 256 × bytes_per_element. Для q8_0 коэффициент 34/32 байта с учетом scale-блоков. Recurrent state и служебные буферы считаются отдельно.
 
@@ -95,7 +122,7 @@ bash download-model.sh
 bash ./docker-wsl.sh compose up -d --force-recreate llama
 ```
 
-Убедитесь, что обе строки есть в .env. В DSH измените Context window существующей модели на 196608, оставьте Max output tokens=8192 и начните новую сессию. prepare.sh повторно запускать не нужно. Старый Q5-файл автоматически не удаляется; для скачивания Q4 требуется еще около 16.5 GB свободного места. Для новой установки используйте команды ниже.
+Убедитесь, что обе строки есть в .env. prepare.sh повторно запускать не нужно. Старый Q5-файл автоматически не удаляется; для скачивания Q4 требуется еще около 16.5 GB свободного места. Для новой установки используйте команды ниже.
 
 
 ```bash
@@ -103,7 +130,7 @@ bash prepare.sh
 bash download-model.sh
 ```
 
-prepare.sh скачивает образы и сохраняет их digests в .env; DSH получает точную опубликованную npm-версию 0.1.x. Интернет нужен для начальной установки. Это фиксация выбранных версий, а не гарантия их взаимной совместимости. Сохраните .env после приемки; не запускайте автоматические обновления контейнеров. Для полного восстановления сохраните и собранный образ DSH, поскольку зависимости npm могут использовать диапазоны версий.
+prepare.sh скачивает образы и сохраняет их digests в .env. Интернет нужен для начальной установки. Это фиксация выбранных версий, а не гарантия их взаимной совместимости. Сохраните .env после приемки; не запускайте автоматические обновления контейнеров.
 
 download-model.sh скачивает указанный файл из Hugging Face в models/, фиксирует ревизию репозитория и записывает локальную SHA256 (по строке на файл в models/SHA256SUMS). По умолчанию скачивается Qwen3.8-27B-UD-Q4_K_M.gguf; другую модель можно передать явно:
 
@@ -143,59 +170,31 @@ nvidia-smi --query-gpu=index,name,memory.used,memory.free,utilization.gpu,power.
 
 `CPU_Mapped`, mmap/page cache и небольшие host/output buffers сами по себе не доказывают CPU-вычисления. Важно, какие тензоры реально размещены на CPU. Не используйте mlock для удержания дополнительной полной копии модели в RAM. В Windows следите также за Shared GPU memory: GPU offload в логах сам по себе не гарантирует отсутствие вытеснения драйвером.
 
-smoke-test.py проверяет обычный ответ, streaming usage, выдачу tool call и продолжение после результата инструмента. Это обязательнее для агента, чем тест «привет». Затем в самом DSH отдельно проверьте небольшой цикл чтения/создания файла.
+smoke-test.py проверяет обычный ответ, streaming usage, выдачу tool call и продолжение после результата инструмента. Это обязательнее для агента, чем тест «привет».
 
-6. Поднять мониторинг и DeepSeek Harness
+6. Поднять мониторинг
 
 ```bash
-bash ./docker-wsl.sh compose build dsh
-bash ./docker-wsl.sh compose run --rm --no-deps dsh dsh plugin --profile web add @loongsuite/dsh-plugin@0.1.2
 bash ./docker-wsl.sh compose up -d
-bash ./docker-wsl.sh compose logs --tail=100 dsh
 ```
-
-Если plugin manager именно выбранной версии не принимает version suffix, используйте документированное `dsh plugin --profile web add @loongsuite/dsh-plugin`, проверьте установленную версию в логах и сохраните состояние dsh-data. Не считайте отсутствие ошибки установки доказательством работающей телеметрии.
-
-Откройте напечатанный DSH URL с токеном авторизации, обычно http://127.0.0.1:3080. DSH слушает loopback внутри контейнера; соседний socat разделяет его network namespace и пересылает 3081 → 3080. На хост опубликован только loopback. Это учитывает документированный запрет DSH на bind 0.0.0.0. После пересоздания контейнера DSH пересоздавайте и dsh-forward: `bash ./docker-wsl.sh compose up -d --force-recreate dsh dsh-forward`.
-
-В Settings → Models → Add a custom provider:
-
-| Поле | Значение |
-|---|---|
-| Provider ID | local-qwen |
-| API protocol | openai-completions |
-| Base URL | http://llama:8080/v1 |
-| API key | local-only |
-| Model ID | qwen3.8-27b |
-| Context window | 131072 |
-| Max output tokens | 8192 |
-
-Выберите модель для новой сессии. `local-only` — непустое значение для клиента; аутентификация llama API в этом локальном стеке не включена. Другим машинам порты не опубликованы. Не вводите DeepSeek API key: для локальной Qwen он не нужен. Не используйте облачные search/title/summary-провайдеры, если хотите полностью локальную обработку; если в настройках есть вспомогательные модели, назначьте им local-qwen.
-
-Если адаптер жалуется на формат запроса, в существующую запись provider в `$DSH_HOME/settings.yaml` добавьте compat.supportsDeveloperRole: false и compat.maxTokensField: max_tokens. Не перезаписывайте весь файл. Документированный редактор: Settings → Open configuration file; внутри Docker файл находится в /home/node/.dsh/settings.yaml. Не передавайте `deepseek`-специфичные reasoning поля модели Qwen без проверки.
-
-Контекст 131072 включает инструкции, tools, историю, результаты команд, reasoning и ответ. При max output 8192 держите вход примерно до 115–120K, оставляя запас служебным сообщениям. Настройте compaction до предела; в ходе первых длинных сессий проверьте, что выбранная версия DSH учитывает локальный context window. Начинайте с одной задачи; параллельные агентские вызовы попадут в очередь одного слота.
-
-Папка ./workspace — рабочие файлы агента. UID node внутри контейнера — 1000; папка должна быть доступна ему на запись. При другом UID WSL исправьте права именно этой папки. Компиляторы/тесты, запущенные агентом, могут потреблять много CPU/RAM отдельно от инференса.
 
 7. Grafana и проверка OpenTelemetry
 
 Откройте http://127.0.0.1:3055, пользователь admin. Пароль — значение GRAFANA_PASSWORD в .env. Источники Prometheus, Tempo и Loki и dashboards LLM (local-qwen), SDXL, Qwen-Image, Qwen-Image UC, Telegram bot, market scraper, torrent и логов provisioned автоматически; между ними есть перекрёстные ссылки.
 
-Схема: DSH + LoongSuite → OTLP/HTTP → Collector → Tempo (traces), Collector → Prometheus (metrics); llama, sdxl, tgbot, scraper, torrent, ComfyUI-сервисы (через /local-qwen-image*/metrics) и gpu-exporter → Prometheus; Loki ← Alloy ← docker-логи; Grafana читает все хранилища. Стандартный session-telemetry-otel DSH не заменяет GenAI tracing-плагин.
+Схема: OTLP/HTTP → Collector → Tempo (traces), Collector → Prometheus (metrics); llama, sdxl, tgbot, scraper, torrent, ComfyUI-сервисы (через /local-qwen-image*/metrics) и gpu-exporter → Prometheus; Loki ← Alloy ← docker-логи; Grafana читает все хранилища.
 
-После запроса из DSH подождите 60–90 секунд:
+После запроса к модели подождите 60–90 секунд:
 
 ```bash
-curl --fail http://127.0.0.1:8889/metrics | grep gen_ai
 curl --fail http://127.0.0.1:8080/metrics
 curl --fail http://127.0.0.1:9835/metrics
-bash ./docker-wsl.sh compose logs --tail=100 otel tempo dsh
+bash ./docker-wsl.sh compose logs --tail=100 otel tempo
 ```
 
-В Prometheus http://127.0.0.1:9090/targets все три scrape targets должны быть UP. В Grafana Explore → Tempo найдите service.name=dsh-agent, разверните вызовы LLM/tool и проверьте gen_ai.usage.input_tokens/output_tokens. Плагин экспортирует также gen_ai.client.token.usage и gen_ai.client.operation.duration. Их Prometheus-имена нормализуются Collector; смотрите фактический /metrics, а не подставляйте непроверенное имя в dashboard.
+В Prometheus http://127.0.0.1:9090/targets все три scrape targets должны быть UP.
 
-Встроенный dashboard показывает вычисленные llama токены, скорость, очередь и доступность. Токены, обработанные движком, могут отличаться от полного usage запроса из-за повторного использования префикса. Для расхода по агентским вызовам используйте GenAI usage из DSH; не суммируйте обе системы. Не прибавляйте reasoning повторно к completion, если это его подмножество. Для histogram token usage суммируются _sum, не _count. В стандартном профиле тексты промптов не записываются в OTel spans.
+Встроенный dashboard показывает вычисленные llama токены, скорость, очередь и доступность. Токены, обработанные движком, могут отличаться от полного usage запроса из-за повторного использования префикса. Не прибавляйте reasoning повторно к completion, если это его подмножество. Для histogram token usage суммируются _sum, не _count.
 
 В Grafana импортируйте официальный GPU dashboard 14574 либо 25547, выбрав Prometheus. Сверьте UUID обеих карт. Некоторые поля WSL могут отсутствовать или быть N/A; это не нулевая нагрузка.
 
@@ -213,9 +212,9 @@ Start-Service nvidia_gpu_exporter
 
 Сначала короткий smoke test, затем реальные задачи с входом около 32K, 64K, 96K и 115–120K токенов. Измеряйте токены через tokenizer/usage сервера, не количеством символов. Проверяйте длинный prefill и несколько тысяч output tokens, затем повторный ход и tool call. Проведите 30–60 минут под типичной нагрузкой и с обычными Windows-приложениями.
 
-При OOM во время prefill сначала QWEN_UBATCH_SIZE=64. Если тесно всегда — QWEN_CTX_SIZE=65536 и такой же лимит контекста в DSH. Если переполняется только одна карта — корректируйте split. Изменения .env применяются через `bash ./docker-wsl.sh compose up -d --force-recreate llama`. Не компенсируйте OOM уменьшением offload слоев: это нарушит вашу цель. Для 128K уже выбран UD-Q4_K_M; лимит контекста в DSH должен быть 131072. Q5/128K и Q6/64K — эксперимент после замеров, не гарантированный режим. Не задавайте native 262K автоматически.
+При OOM во время prefill сначала QWEN_UBATCH_SIZE=128; если OOM при создании MTP draft context — уменьшайте QWEN_CTX_SIZE шагами по 8192 или отключите MTP (QWEN_SPEC_TYPE=none). Если тесно всегда — QWEN_CTX_SIZE=65536. Если переполняется только одна карта — корректируйте split. Изменения .env применяются через `bash ./docker-wsl.sh compose up -d --force-recreate llama`. Не компенсируйте OOM уменьшением offload слоев: это нарушит вашу цель. Для 128K уже выбран UD-Q4_K_M. Q5/128K и Q6/64K — эксперимент после замеров, не гарантированный режим. Не задавайте native 262K автоматически.
 
-RAM cache и context checkpoints отключены для ограничения памяти; в агентских диалогах это может ухудшать повторное использование истории и увеличивать prefill. Увеличивать checkpoints следует только с отдельными замерами памяти. Две карты не обещают двукратного ускорения: layer split выбран для умеренного межкарточного обмена; PCIe topology и WSL влияют на скорость.
+Prompt cache в RAM (`QWEN_CACHE_RAM`, MiB) и context checkpoints (`QWEN_CTX_CHECKPOINTS`) включены: у гибридной модели recurrent state нельзя откатить, поэтому без них любое расхождение истории означает полный prefill. В многоходовом диалоге на 30K следующий ход обрабатывает только новые токены (7–8 с вместо 38 с). Правка глубоко в истории (раньше последнего checkpoint) по-прежнему пересчитывает промпт с начала. Две карты не обещают двукратного ускорения: layer split выбран для умеренного межкарточного обмена; PCIe topology и WSL влияют на скорость.
 
 9. Постоянная работа
 
@@ -234,7 +233,7 @@ bash ./docker-wsl.sh compose logs --tail=100 llama
 bash ./docker-wsl.sh compose restart llama
 ```
 
-Сохраняйте .env, конфиги, models/revision.txt, models/SHA256SUMS, workspace и backup named volumes (для согласованной копии остановите соответствующие сервисы). Не используйте `bash ./docker-wsl.sh compose down -v`: это удалит историю/настройки. После обновления DSH/плагина повторяйте tool/usage/trace тесты.
+Сохраняйте .env, конфиги, models/revision.txt, models/SHA256SUMS и backup named volumes (для согласованной копии остановите соответствующие сервисы). Не используйте `bash ./docker-wsl.sh compose down -v`: это удалит историю/настройки.
 
 Источники, проверенные 16 сентября 2026:
 
@@ -245,9 +244,6 @@ bash ./docker-wsl.sh compose restart llama
 - Docker CUDA: https://github.com/ggml-org/llama.cpp/blob/master/docs/docker.md
 - CUDA WSL ограничения: https://docs.nvidia.com/cuda/wsl-user-guide/index.html
 - Docker Desktop GPU: https://docs.docker.com/desktop/features/gpu/
-- DSH local providers: https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/guide/providers.md
-- DSH Web: https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/bundle/web-app/README.md
-- OTel plugin: https://github.com/loongsuite/dsh-plugin
 - Collector: https://opentelemetry.io/docs/collector/configuration/
 - Tempo: https://grafana.com/docs/tempo/latest/configuration/
 - GPU exporter: https://github.com/utkuozdemir/nvidia_gpu_exporter

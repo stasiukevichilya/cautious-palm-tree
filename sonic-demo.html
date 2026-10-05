@@ -1,0 +1,831 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Пролёт над слушателем — физическая модель звука</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600&family=Fira+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#05080f;--panel:#0a1120;--panel2:#0d1628;--line:#18243b;
+  --text:#dbe4f2;--muted:#7b8aa2;--dim:#53607a;
+  --cyan:#28c8e3;--cyan-soft:rgba(40,200,227,.14);--cyan-glow:rgba(40,200,227,.5);
+  --red:#ff5d63;--red-soft:rgba(255,93,99,.14);--red-glow:rgba(255,93,99,.55);
+  --green:#4ade80;--amber:#f59e0b;
+  --f-mono:'Fira Code',ui-monospace,Menlo,monospace;
+  --f-sans:'Fira Sans',system-ui,sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:radial-gradient(1200px 600px at 70% -10%,rgba(40,200,227,.07),transparent 60%),var(--bg);
+  color:var(--text);font-family:var(--f-sans);overflow-x:hidden;-webkit-tap-highlight-color:transparent;
+  padding:clamp(8px,3vw,28px);min-height:100vh}
+::selection{background:rgba(40,200,227,.25)}
+.wrap{max-width:1080px;margin:0 auto;display:grid;gap:14px}
+.hdr{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:4px 0 8px}
+.brand{display:flex;align-items:center;gap:12px}
+.logo{width:34px;height:34px;border:1px solid var(--line);border-radius:8px;display:grid;place-items:center;background:var(--panel)}
+.b-t{font-family:var(--f-mono);font-size:15px;font-weight:600;letter-spacing:.12em}
+.b-s{font-family:var(--f-mono);font-size:11.5px;color:var(--muted);margin-top:2px;letter-spacing:.06em}
+.status{display:flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:11px;letter-spacing:.14em;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:7px 12px;background:var(--panel)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);animation:blink 1.6s infinite}
+.dot.off{background:var(--muted);box-shadow:none;animation:none}
+@keyframes blink{50%{opacity:.25}}
+.scene{position:relative;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:linear-gradient(180deg,rgba(10,17,32,.6),rgba(13,22,40,.9))}
+.canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.hud{position:absolute;pointer-events:none;font-family:var(--f-mono);font-size:11px;letter-spacing:.08em}
+.hud .lbl{color:var(--dim);margin-bottom:3px;letter-spacing:.18em}
+.hud-top{top:12px;left:14px}
+.hud-br{top:12px;right:14px;text-align:right}
+.hud-br .big{font-size:19px;font-weight:600;line-height:1.2;letter-spacing:.04em}
+.hud-br .sub{color:var(--muted);font-size:10.5px;margin-top:2px}
+.state{bottom:14px;left:14px;max-width:560px}
+.state .st{font-size:15px;font-weight:500;letter-spacing:.06em}
+.bum{position:absolute;top:26%;left:50%;transform:translate(-50%,-50%);font-family:var(--f-mono);font-size:clamp(34px,6vw,64px);font-weight:600;color:var(--red);
+  text-shadow:0 0 30px var(--red-glow);opacity:0;pointer-events:none;letter-spacing:.1em}
+.bum.on{opacity:1;animation:bump .9s cubic-bezier(.2,.9,.3,1.3)}
+@keyframes bump{0%{transform:translate(-50%,-50%) scale(1.25);letter-spacing:.3em}60%{transform:translate(-50%,-50%) scale(1.04)}100%{transform:translate(-50%,-50%) scale(1);letter-spacing:.1em}}
+.tl{position:relative;border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:14px 14px 10px}
+.tl-row{position:relative;height:46px;margin:4px 4px 6px}
+.tl-track{position:absolute;inset:0;background:linear-gradient(90deg,rgba(40,200,227,.10),rgba(40,200,227,.04))}
+.tl-mark{position:absolute;bottom:12px;left:0;width:2px;height:10px;border-top:2px solid var(--muted)}
+.tl-mark.t0{left:50% !important;border-top-color:var(--amber);width:3px}
+.tl-mark.boom{left:0;border-top-color:var(--red);width:3px}
+.tl-mark-label{position:absolute;bottom:26px;transform:translateX(-50%);font-family:var(--f-mono);font-size:10px;color:var(--muted);white-space:nowrap;letter-spacing:.04em}
+.tl-mark-label.boom-l{color:var(--red)}
+.tl-playhead{position:absolute;top:0;bottom:0;width:2px;background:var(--cyan);box-shadow:0 0 8px var(--cyan-glow);z-index:2}
+.tl-playhead::after{content:"";position:absolute;top:0;right:-7px;border:6px solid transparent;border-left:6px solid var(--cyan)}
+.scope{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:8px 6px 4px}
+.scope-c{display:block;width:100%;height:74px;border-radius:8px}
+.scope-lbl{font-family:var(--f-mono);font-size:10px;color:var(--dim);letter-spacing:.22em;margin:8px 8px 2px;text-transform:uppercase}
+.ctrl{border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:14px}
+.ctrl-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.btn{font-family:var(--f-mono);font-size:12px;letter-spacing:.06em;min-height:42px;padding:9px 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);color:var(--text);cursor:pointer;display:flex;align-items:center;gap:8px;transition:all .15s}
+.btn:hover{border-color:#3a4d70;color:#fff;transform:translateY(-1px)}
+.btn:active{transform:translateY(1px);background:#0a1326}
+.btn:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.btn.sm{min-height:38px;padding:7px 12px;font-size:11px}
+.presets{display:flex;gap:8px;flex-wrap:wrap}
+.pres{font-family:var(--f-mono);font-size:11px;min-height:42px;padding:6px 13px;border:1px solid var(--line);border-radius:999px;background:var(--panel2);color:var(--text);cursor:pointer;transition:all .15s}
+.pres:hover{border-color:#3a4d70}
+.pres.b-civil{border-color:rgba(40,200,227,.45);color:var(--cyan)}
+.pres.b-civil:hover{background:var(--cyan-soft)}
+.pres.b-mil{border-color:rgba(255,93,99,.45);color:var(--red)}
+.pres.b-mil:hover{background:var(--red-soft)}
+.pres.b-space{border-color:rgba(245,158,11,.45);color:var(--amber)}
+.pres.b-space:hover{background:rgba(245,158,11,.15)}
+.pres.active{box-shadow:0 0 0 2px currentColor}
+.preset-hint{display:block;width:100%;margin-top:-1px;font-size:10px;color:var(--dim);letter-spacing:.02em}
+.speed-block{flex:1;min-width:320px}
+.speed-head{display:flex;justify-content:space-between;font-family:var(--f-mono);font-size:10.5px;letter-spacing:.12em;color:var(--dim)}
+.speed-val{font-family:var(--f-mono);font-size:12px;color:var(--text);font-weight:600;min-width:130px;text-align:right}
+.speed-val .m{font-size:11px;letter-spacing:.06em}
+.speed-val .m.cyan{color:var(--cyan)} .speed-val .m.red{color:var(--red)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:18px;height:18px;border-radius:50%;background:#fff;border:2px solid var(--cyan);box-shadow:0 0 0 3px rgba(40,200,227,.25),0 0 14px var(--cyan-glow);margin-top:-5px}
+input[type=range]::-webkit-slider-thumb:hover{box-shadow:0 0 0 5px rgba(40,200,227,.4),0 0 18px var(--cyan-glow)}
+input[type=range].sup::-webkit-slider-thumb{border-color:var(--red);box-shadow:0 0 0 3px rgba(255,93,99,.25),0 0 14px var(--red-glow)}
+input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:3px;background:linear-gradient(90deg,var(--cyan) 0 30.7%,var(--line) 30.7% 100%)}
+input[type=range].sup::-webkit-slider-runnable-track{background:linear-gradient(90deg,var(--cyan) 0 30.7%,var(--red) 30.7% 100%)}
+input[type=range]::-moz-range-track{height:6px;border-radius:3px;background:linear-gradient(90deg,var(--cyan) 0 30.7%,var(--line) 30.7% 100%)}
+input[type=range].sup::-moz-range-track{background:linear-gradient(90deg,var(--cyan) 0 30.7%,var(--red) 30.7% 100%)}
+input[type=range]::-moz-range-thumb{width:18px;height:18px;margin-top:-5px;border-radius:50%;background:#fff;border:2px solid var(--cyan)}
+.ticks{position:relative;height:18px;font-family:var(--f-mono);font-size:9.5px;color:var(--dim)}
+.tick{position:absolute;white-space:nowrap}
+.tick.left{left:0}
+.tick.right{left:100%;transform:translateX(-100%)}
+.tick b{color:var(--red)}
+.ts{display:flex;gap:4px;flex:1;flex-wrap:wrap}
+.ts button{font-family:var(--f-mono);font-size:12px;min-height:40px;min-width:44px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--muted);cursor:pointer;transition:all .15s}
+.ts button:hover{color:#fff;border-color:#3a4d70}
+.ts button.on{background:var(--cyan-soft);color:var(--cyan);border-color:var(--cyan)}
+.level-block{width:100%}
+.level-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.level{width:160px;height:10px;border-radius:5px;background:var(--line);overflow:hidden}
+.level i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--cyan),#a8e6ff);box-shadow:0 0 10px var(--cyan-glow);transition:width .12s}
+.level.boom i{background:linear-gradient(90deg,var(--red),#ffb3a0);box-shadow:0 0 14px var(--red-glow)}
+.lvl-val{font-family:var(--f-mono);font-size:12px;color:var(--muted);min-width:40px}
+.info{font-family:var(--f-mono);font-size:11.5px;color:var(--muted);width:100%}
+.info b{color:var(--text);font-weight:500}
+.foot{font-family:var(--f-mono);font-size:11px;color:var(--dim);letter-spacing:.04em;line-height:1.7}
+.foot b{color:var(--muted);font-weight:500}
+@media (max-width:720px){
+  .ctrl{padding:12px}
+  .state{max-width:260px}
+  .speed-block{min-width:100%}
+}
+@media (prefers-reduced-motion:reduce){
+  .dot{animation:none}
+  .bum{animation:none}
+  .bum.on{transition:opacity .2s}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hdr">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 34 34" aria-hidden="true">
+        <path d="M3 17h28M17 17 27 7 21 13 18 17 18 21 21 17 27 21z" fill="none" stroke="#28c8e3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div>
+        <div class="b-t">AEROCALC</div>
+        <div class="b-s">ПРОЛЁТ НАД СЛУШАТЕЛЕМ · МАТЕМАТИКА ЗВУКА</div>
+      </div>
+    </div>
+    <div class="status" id="statusBox">
+      <span class="dot" id="dot"></span><span id="statusTxt">РЕЖИМ: ПАУЗА</span>
+    </div>
+  </header>
+
+  <section class="scene" aria-label="Сцена: объект летит над слушателем, звук распространяется со скоростью звука">
+    <canvas class="canvas" id="scene"></canvas>
+    <div class="hud hud-top">
+      <div class="lbl">СЦЕНА</div>
+      <div id="hudTime" style="color:var(--muted)">t = 0.0 с</div>
+    </div>
+    <div class="hud hud-br">
+      <div class="big" id="hudMach" style="color:var(--cyan)">MAH 1.00</div>
+      <div class="sub" id="hudDist">0.0 км</div>
+    </div>
+    <div class="hud state">
+      <div class="lbl" style="color:var(--dim);margin-bottom:4px">СЛУШАТЕЛЬ</div>
+      <div class="st" id="stateText" aria-live="polite">…</div>
+    </div>
+    <div class="bum" id="bum">БУМ</div>
+  </section>
+
+  <section class="tl" aria-label="Линейка времени">
+    <div class="tl-row" id="tlRow" role="slider" tabindex="0"
+         aria-label="Таймлайн пролёта" aria-valuemin="-150" aria-valuemax="150" aria-valuenow="0">
+      <div class="tl-track"></div>
+      <div class="tl-mark t0" style="left:50%" title="пролёт, t=0"></div>
+      <div class="tl-mark-label" style="left:50%">t=0 · пролёт</div>
+      <div class="tl-mark boom" id="tlBoom" style="left:0%" hidden></div>
+      <div class="tl-mark-label boom-l" id="tlBoomLab" style="left:0%" hidden>ударная волна</div>
+      <div class="tl-playhead" id="playhead"></div>
+    </div>
+  </section>
+
+  <section class="scope" aria-label="Амплитуда звука у слушателя">
+    <div class="scope-lbl">Амплитуда слышанного звука (масштаб)</div>
+    <canvas class="scope-c" id="scope"></canvas>
+  </section>
+
+  <section class="ctrl">
+    <div class="ctrl-row">
+      <button class="btn" id="btnPlay" aria-pressed="false" title="Воспроизведение / пауза">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="#28c8e3" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+        <span id="playLbl">Воспроизведение</span>
+      </button>
+      <button class="btn sm" id="btnReset" title="Сброс времени">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 4 6 9H21v12H9L4 17 1 4z" transform="rotate(0)"/></svg>
+        Сброс
+      </button>
+      <div class="ts" id="tsGroup" role="group" aria-label="Скорость воспроизведения"></div>
+    </div>
+    <div class="ctrl-row" style="margin-top:14px">
+      <div class="speed-block">
+        <div class="speed-head">
+          <span id="speedLbl">СКОРОСТЬ ОБЪЕКТА</span>
+          <div class="speed-val"><b id="speedVal">2300</b> км/ч&nbsp;&nbsp;<span class="m cyan" id="machVal">MAH 1.86</span></div>
+        </div>
+        <input type="range" id="speed" min="0" max="1000" step="1" aria-label="Скорость, км/ч" value="500">
+        <div class="ticks">
+          <span class="tick left">300</span>
+          <span class="tick" style="left:30.7%"><b>MACH 1 ≈ 1235</b></span>
+          <span class="tick right">30 000</span>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;justify-content:center">
+        <div class="lvl-val" style="font-size:10px;color:var(--dim);letter-spacing:.18em">УРОВЕНЬ ЗВУКА</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="level" id="lvlBox"><i id="lvlBar"></i></div>
+          <span class="lvl-val" id="lvlPct">0%</span>
+        </div>
+        <button class="btn sm" id="btnSound" aria-pressed="false" aria-label="Включить звук">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M11 5 6 9H2v10h4l5 4v-6H7z"/></svg>
+          Звук
+        </button>
+      </div>
+    </div>
+    <div class="ctrl-row" style="margin-top:12px">
+      <button class="pres b-civil" id="pCivil" data-v="850">Гражданская авиация</div>
+      <div class="preset-hint">≈ 850 км/ч · Мах 0.69</div>
+      <button class="pres b-mil" id="pMil" data-v="2300">Военная авиация</div>
+      <div class="preset-hint">≈ 2300 км/ч · Мах 1.86</div>
+      <button class="pres b-space" id="pSpace" data-v="27000">Космическая</div>
+      <div class="preset-hint">≈ 27 000 км/ч · Мах 22 · орбитальная</div>
+    </div>
+  </section>
+
+  <p class="foot">
+    <b>МОДЕЛЬ.</b> Объект летит на высоте 12 км. Звук — со скоростью звука 343 м/с (≈ 1235 км/ч).
+    В дозвуковом режиме слышен непрерывный гул из прошлого (растёт задержка); в сверхзвуковом — тишина, а затем ударная волна.
+  </p>
+</div>
+<script>
+/* ============ КОНСТАНТЫ (км, с) ============ */
+const C   = 0.343;
+const H   = 12;
+const H2  = H*H;
+const C2  = C*C;
+const XW  = 50;
+const T0  = 150;
+const SPEED_MAX = 30000;
+const MIN_SPEED = 300;
+
+/* ============ СОСТОЯНИЕ ============ */
+let v = 2300/3600;   // км/с
+let t = -T0;
+let playing = false;
+let mult = 4;
+let lastTs = 0;
+let flashUntil = -1e9;
+let lastT = t;
+let audioOn = false;
+
+/* ============ ФУНКЦИИ ============ */
+const el = s => document.getElementById(s);
+function setSpeedKmh(k){
+  k = Math.max(MIN_SPEED, Math.min(SPEED_MAX, k));
+  v = k/3600;
+  setSpeedUI();
+  sync();
+}
+function speedKmh(){ return v*3600; }
+const logMin = Math.log10(MIN_SPEED);
+const logMax = Math.log10(SPEED_MAX);
+function setSpeedUI(){
+  const k = speedKmh();
+  const val = Math.max(0, Math.min(1000, 1000*(Math.log10(k) - logMin)/(logMax - logMin)));
+  el('speed').value = val;
+  el('speedVal').textContent = k >= 1000 ? k.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,' ') : k.toFixed(0);
+  const M = v/C;
+  el('machVal').textContent = 'MAH ' + M.toFixed(2);
+  el('machVal').className = 'm ' + (M < 1 ? 'cyan' : 'red');
+  el('speed').classList.toggle('sup', M >= 1);
+  el('hudMach').textContent = 'MAH ' + M.toFixed(2);
+  el('hudMach').style.color = M < 1 ? 'var(--cyan)' : 'var(--red)';
+}
+/* -------- Физика -------- */
+function mach(){ return v/C; }
+function boomT(){
+  const M = v/C;
+  if (M <= 1) return null;
+  return H*Math.sqrt(v*v-C*C)/(C*v);
+}
+function heardRoot(t_){
+  const A = C2 - v*v;
+  if (A < -1e-9) return [];
+  const B = -2*C2*t_;
+  const Cc = C2*t_*t_ - H2;
+  const disc = B*B - 4*A*Cc;
+  if (disc < 0) return [];
+  const sq = Math.sqrt(disc);
+  const r1 = (-B - sq)/(2*A);
+  const r2 = (-B + sq)/(2*A);
+  return [r1, r2].filter(r => r <= t_ + 1e-9);
+}
+function levelAt(tt){
+  const M = v/C;
+  if (M >= 1){
+    const tb = boomT();
+    if (!tb || tt < tb) return 0;
+    const spike = Math.exp(-(tt - tb)/0.6);
+    let sum = 0;
+    const roots = heardRoot(tt);
+    for (const re of roots){
+      const d = Math.sqrt(v*v*re*re + H2);
+      sum += H2/(d*d);
+    }
+    return Math.min(1.4, spike + 0.08*sum);
+  } else {
+    const roots = heardRoot(tt);
+    if (!roots.length) return 0;
+    const re = roots[0];
+    const d = Math.sqrt(v*v*re*re + H2);
+    return Math.min(1, H2/(d*d));
+  }
+}
+function lagAt(tt){
+  const roots = heardRoot(tt);
+  if (!roots.length) return null;
+  let re = roots[0];
+  if (v/C > 1 && roots.length > 1) re = roots.find(r => r > 0) || re;
+  return tt - re;
+}
+function dopplerAt(tt){
+  const roots = heardRoot(tt);
+  if (!roots.length) return null;
+  let re = roots[roots.length-1];
+  if (v/C > 1 && roots.length > 1) re = roots.find(r => r > 0) || re;
+  const d = Math.sqrt(v*v*re*re + H2);
+  if (d < 1e-6) return 2.5;
+  const f = C*d/(C*d + v*v*re);
+  return Math.max(0.3, Math.min(2.8, f));
+}
+/* -------- АУДИО -------- */
+let actx = null, osc = null, bass = null, masterG = null, bassG = null;
+function ensureAudio(){
+  if (actx) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  actx = new AC();
+  masterG = actx.createGain();
+  masterG.gain.value = 0;
+  masterG.connect(actx.destination);
+  osc = actx.createOscillator();
+  osc.type = 'sawtooth';
+  osc.frequency.value = 55;
+  const g1 = actx.createGain();
+  g1.gain.value = 0.25;
+  osc.connect(g1);
+  g1.connect(masterG);
+  bass = actx.createOscillator();
+  bass.type = 'triangle';
+  bass.frequency.value = 27.5;
+  const g2 = actx.createGain();
+  g2.gain.value = 0.3;
+  bass.connect(g2);
+  g2.connect(masterG);
+  const nbuf = actx.createBuffer(1, actx.sampleRate*1, actx.sampleRate);
+  const nd = nbuf.getChannelData(0);
+  for (let i=0;i<nd.length;i++) nd[i] = (Math.random()*2-1)*0.6;
+  const noiseSrc = actx.createBufferSource();
+  noiseSrc.buffer = nbuf;
+  noiseSrc.loop = true;
+  const noiseLp = actx.createBiquadFilter();
+  noiseLp.type='bandpass';
+  noiseLp.frequency.value=800;
+  noiseLp.Q.value=0.7;
+  const noiseG = actx.createGain();
+  noiseG.gain.value=0.12;
+  noiseSrc.connect(noiseLp);
+  noiseLp.connect(noiseG);
+  noiseG.connect(masterG);
+  osc.start();
+  bass.start();
+}
+function boomNode(){
+  if (!actx) return;
+  const buf = actx.createBuffer(1, actx.sampleRate*0.5, actx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i=0;i<d.length;i++) d[i] = (Math.random()*2-1);
+  const src = actx.createBufferSource();
+  src.buffer = buf;
+  const lp = actx.createBiquadFilter();
+  lp.type='lowpass';
+  const b = actx.createOscillator();
+  b.type='sine';
+  b.frequency.value = 60;
+  const bg = actx.createGain();
+  bg.gain.setValueAtTime(0.8, actx.currentTime);
+  bg.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + 1.2);
+  src.connect(b);
+  b.connect(bg);
+  const g3 = actx.createGain();
+  src.connect(g3);
+  g3.connect(bg);
+  src.connect(lp);
+  lp.frequency.setValueAtTime(4000, actx.currentTime);
+  lp.frequency.exponentialRampToValueAtTime(80, actx.currentTime + 0.25);
+  lp.gain.setValueAtTime(0.5, actx.currentTime);
+  lp.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + 0.5);
+  lp.connect(masterG);
+}
+/* -------- CANVAS -------- */
+const cv = el('scene');
+const scope = el('scope');
+let dpr = 1;
+function resize(){
+  dpr = Math.min(window.devicePixelRatio||1, 2);
+  const r = cv.getBoundingClientRect();
+  cv.width = r.width*dpr;
+  cv.height = r.height*dpr;
+  const cx = cv.getContext('2d');
+  cx.setTransform(dpr,0,0,dpr,0,0);
+}
+function w2x(x){ return (x + XW)/(2*XW) * cv.width/dpr; }
+function w2y(y){
+  const top = 22;
+  const bottom = -3;
+  const span = top - bottom;
+  return (top - y)/span * (cv.height/dpr);
+}
+function drawCircle(x, y, r){
+  if (r <= 0) return;
+  cx.beginPath();
+  cx.arc(x, y, r, 0, 6.283);
+  cx.stroke();
+}
+function drawPlane(x, y, M){
+  cx.save();
+  cx.translate(x, y);
+  cx.fillStyle = M < 1 ? '#28c8e3' : '#ff5d63';
+  cx.strokeStyle = M < 1 ? 'rgba(40,200,227,.5)' : 'rgba(255,93,99,.5)';
+  cx.shadowColor = M < 1 ? 'rgba(40,200,227,.5)' : 'rgba(255,93,99,.5)';
+  cx.shadowBlur = 8;
+  cx.beginPath();
+  cx.moveTo(20,0);
+  cx.lineTo(-14,-6);
+  cx.lineTo(-10,-10);
+  cx.lineTo(-4,-4);
+  cx.lineTo(-4,4);
+  cx.lineTo(-10,10);
+  cx.lineTo(-14,6);
+  cx.closePath();
+  cx.fill();
+  cx.stroke();
+  cx.restore();
+}
+function drawListener(x, y, t, L, isBoom){
+  cx.save();
+  if (isBoom){
+    cx.fillStyle = '#ff5d63';
+    cx.strokeStyle = '#ff5d63';
+    cx.shadowColor = 'rgba(255,93,99,.5)';
+    cx.shadowBlur = 18;
+  } else if (L > 0.05){
+    cx.fillStyle = '#28c8e3';
+    cx.strokeStyle = '#28c8e3';
+    cx.shadowColor = 'rgba(40,200,227,.5)';
+    cx.shadowBlur = 8;
+  } else {
+    cx.fillStyle = '#5a6b85';
+    cx.strokeStyle = '#5a6b85';
+    cx.shadowColor = 'transparent';
+    cx.shadowBlur = 0;
+  }
+  const r = isBoom ? 10 : 8;
+  cx.beginPath();
+  cx.arc(x, y, r, 0, 7);
+  cx.fill();
+  cx.stroke();
+  cx.restore();
+}
+function drawScene(){
+  const cx = cv.getContext('2d');
+  const W = cv.width/dpr;
+  const Hh = cv.height/dpr;
+  cx.setTransform(dpr,0,0,dpr,0,0);
+  cx.clearRect(0,0,W,Hh);
+  const bg = cx.createLinearGradient(0,0,0,Hh);
+  bg.addColorStop(0,'#05080f');
+  bg.addColorStop(1,'#0a0f1e');
+  cx.fillStyle = bg;
+  cx.fillRect(0,0,W,Hh);
+  cx.strokeStyle = 'rgba(120,150,200,.05)';
+  cx.lineWidth = 1;
+  for (let x=-50; x<=50; x+=10){
+    const px = w2x(x);
+    cx.beginPath();
+    cx.moveTo(px,0);
+    cx.lineTo(px, Hh*0.78);
+    cx.stroke();
+  }
+  const gy = w2y(0);
+  const hy = w2y(H);
+  cx.fillStyle = '#0a0f1e';
+  cx.fillRect(0, gy, W, Hh-gy);
+  cx.strokeStyle = '#24314d';
+  cx.lineWidth = 2;
+  cx.beginPath();
+  cx.moveTo(0,gy);
+  cx.lineTo(W,gy);
+  cx.stroke();
+  const ox = v*t;
+  cx.save();
+  cx.translate(w2x(ox), gy);
+  cx.scale(1, 0.35);
+  cx.fillStyle = 'rgba(0,0,0,.15)';
+  cx.beginPath();
+  cx.ellipse(0,0, 28, 10, 0, 0, Math.PI*2);
+  cx.fill();
+  cx.restore();
+  cx.setLineDash([4,6]);
+  cx.strokeStyle='rgba(40,200,227,.25)';
+  cx.lineWidth=1;
+  cx.beginPath();
+  cx.moveTo(0,hy);
+  cx.lineTo(W,hy);
+  cx.stroke();
+  cx.setLineDash([]);
+  cx.fillStyle='rgba(120,150,200,.5)';
+  cx.font='10px "Fira Code",monospace';
+  cx.fillText('h = 12 км', 8, hy-6);
+  cx.setLineDash([2,5]);
+  cx.strokeStyle='rgba(255,255,255,.12)';
+  cx.beginPath();
+  cx.moveTo(w2x(0),0);
+  cx.lineTo(w2x(0),gy);
+  cx.stroke();
+  cx.setLineDash([]);
+  const M = v/C;
+  const onScreen = ox >= -XW-50 && ox <= XW+50;
+  if (onScreen) drawPlane(w2x(ox), w2y(H), M);
+  if (M < 1){
+    for (let te = Math.floor((t - 70)/5)*5; te <= t; te += 5){
+      if (te >= t) continue;
+      if (t - te > 40) continue;
+      const d = Math.sqrt(v*v*te*te + H2);
+      const r = (t-te)*C;
+      cx.strokeStyle = 'rgba(40,200,227,.10)';
+      cx.lineWidth = 1;
+      drawCircle(w2x(v*te), w2y(H), r);
+    }
+    const roots = heardRoot(t);
+    if (roots.length){
+      const re = roots[0];
+      const d = Math.sqrt(v*v*re*re + H2);
+      cx.strokeStyle = 'rgba(40,200,227,.7)';
+      cx.lineWidth = 1.5;
+      drawCircle(w2x(v*re), w2y(H), C*(t-re));
+      cx.fillStyle='rgba(40,200,227,.9)';
+      cx.beginPath();
+      cx.arc(w2x(v*re), w2y(H), 3, 0, 7);
+      cx.fill();
+      cx.setLineDash([2,3]);
+      cx.strokeStyle='rgba(40,200,227,.5)';
+      cx.lineWidth=1;
+      cx.beginPath();
+      cx.moveTo(w2x(v*re), w2y(H));
+      cx.lineTo(w2x(0), gy);
+      cx.stroke();
+      cx.setLineDash([]);
+    }
+  } else {
+    if (onScreen){
+      const alpha = Math.asin(1/M);
+      const xg = v*t - H*Math.sqrt(M*M-1);
+      const ax = w2x(ox);
+      const ay = w2y(H);
+      const ux = Math.cos(alpha);
+      const uy = -Math.sin(alpha);
+      const len = 30;
+      cx.fillStyle = 'rgba(255,255,255,.04)';
+      cx.beginPath();
+      cx.moveTo(ax, ay);
+      cx.lineTo(ax + ux*len, ay + uy*len);
+      cx.lineTo(ax - ux*len, ay - uy*len);
+      cx.closePath();
+      cx.fill();
+      cx.strokeStyle = 'rgba(255,255,255,.45)';
+      cx.lineWidth = 1.5;
+      cx.beginPath(); cx.moveTo(ax, ay); cx.lineTo(ax + ux*len, ay + uy*len); cx.stroke();
+      cx.beginPath(); cx.moveTo(ax, ay); cx.lineTo(ax - ux*len, ay - uy*len); cx.stroke();
+      cx.fillStyle = 'rgba(255,93,99,.8)';
+      cx.fillRect(w2x(xg)-4, w2y(0)-4, 8, 8);
+      cx.beginPath(); cx.arc(w2x(xg), w2y(0), 4, 0, 7); cx.fill();
+    }
+    const tb = boomT();
+    if (tb !== null && t >= tb && t - tb < 3){
+      const rr = (t - tb)*C;
+      cx.strokeStyle = 'rgba(255,255,255,'+Math.max(0.1, Math.exp(-(t-tb)*2)).toFixed(2)+')';
+      cx.lineWidth = 2;
+      drawCircle(w2x(0), w2y(0), rr);
+    }
+  }
+  const L = levelAt(t);
+  const tb2 = boomT();
+  const isBoom = tb2 !== null && t >= tb2 && t - tb2 < 1.5;
+  drawListener(w2x(0), w2y(0), t, L, isBoom);
+}
+function drawScope(){
+  const w = Math.round(scope.clientWidth * dpr);
+  const h = Math.round(scope.clientHeight * dpr);
+  if (w === 0 || h === 0) return;
+  if (scope.width !== w) scope.width = w;
+  if (scope.height !== h) scope.height = h;
+  const s = scope.getContext('2d');
+  const W = w/dpr;
+  const Hh = h/dpr;
+  s.setTransform(dpr,0,0,dpr,0,0);
+  s.clearRect(0,0,W,Hh);
+  s.strokeStyle = 'rgba(120,150,200,.15)';
+  s.lineWidth = 1;
+  s.beginPath();
+  s.moveTo(0, Hh/2);
+  s.lineTo(W, Hh/2);
+  s.stroke();
+  const xT = (W-3) * (t + T0)/(2*T0);
+  s.strokeStyle = 'rgba(40,200,227,.6)';
+  s.beginPath();
+  s.moveTo(xT, 0);
+  s.lineTo(xT, Hh);
+  s.stroke();
+  let px = W-3, py = Hh/2;
+  const tb = boomT();
+  const n = 300;
+  for (let i=0;i<=n;i++){
+    const tt = -T0 + 2*T0*i/n;
+    const L = levelAt(tt, v);
+    const x2 = (W-3) * (tt + T0)/(2*T0);
+    const y2 = Hh/2 - (Math.min(1, L/1.2))*(Hh/2 - 8);
+    s.beginPath();
+    s.moveTo(px,py);
+    s.lineTo(x2,y2);
+    const isSpike = tb !== null && tt >= tb - 0.1;
+    let color;
+    if (L > 0.4) color = isSpike ? 'rgba(255,93,99,.9)' : 'rgba(40,200,227,.9)';
+    else color = 'rgba(120,150,200,.3)';
+    s.strokeStyle = color;
+    s.lineWidth = 2;
+    s.stroke();
+    px=x2; py=y2;
+  }
+}
+/* -------- UI -------- */
+function syncTimeline(){
+  const px = (t + T0)/(2*T0);
+  el('playhead').style.left = (px * 100) + '%';
+  el('tlRow').setAttribute('aria-valuenow', t.toFixed(0));
+  const tb = boomT();
+  const bm = el('tlBoom');
+  const bml = el('tlBoomLab');
+  if (tb !== null && tb >= -T0 && tb <= T0){
+    bm.hidden = bml.hidden = false;
+    const pos = ((tb + T0)/(2*T0)*100).toFixed(1) + '%';
+    bm.style.left = pos;
+    bml.style.left = pos;
+  } else {
+    bm.hidden = bml.hidden = true;
+  }
+}
+function syncStateUI(){
+  const M = v/C;
+  const L = levelAt(t);
+  const lag = lagAt(t);
+  const st = el('stateText');
+  let txt = '';
+  if (M < 1){
+    if (L < 0.05) txt = 'тихо — объект вдали';
+    else txt = 'двигатели · звук из прошлого (' + (lag ? lag.toFixed(1) : 0) + ' с назад)';
+  } else {
+    const tb = boomT();
+    if (!tb) txt = 'тишина';
+    else if (t < tb) txt = 'тишина (объект уже прошёл)';
+    else if (t - tb < 0.4) txt = 'БУМ!';
+    else txt = 'ударная волна затихает';
+  }
+  st.textContent = txt;
+  st.style.color = L > 0.05 || (M > 1 && t > boomT() - 0.4 && boomT() !== null) ? (M > 1 ? 'var(--red)' : 'var(--cyan)') : 'var(--text)';
+  el('lvlBar').style.width = (Math.min(1.4, L)*100) + '%';
+  el('lvlPct').textContent = Math.min(100, L*100).toFixed(0) + '%';
+  el('lvlBox').className = (M > 1 && t > (boomT()||0) - 0.4) ? 'level boom' : 'level';
+  el('hudTime').textContent = 't = ' + t.toFixed(1) + ' с';
+  el('hudDist').textContent = Math.abs(v*t).toFixed(1) + ' км';
+}
+/* -------- LOOP -------- */
+let cx;
+function loop(now){
+  if (playing && lastTs){
+    const dt = (now - lastTs)/1000 * mult;
+    t += dt;
+    if (t > T0) t = -T0;
+  }
+  lastTs = now;
+  const M = v/C;
+  if (M >= 1){
+    const tb = boomT();
+    if (tb !== null && lastT < tb && t >= tb){
+      flashUntil = t + 0.9;
+      if (actx && audioOn && actx.state === 'suspended'){
+        actx.resume();
+      }
+      boomNode();
+    }
+  }
+  const L = levelAt(t);
+  if (actx && audioOn){
+    const dop = dopplerAt(t);
+    if (dop){
+      osc.frequency.setTargetAtTime(55*dop, actx.currentTime, 0.03);
+      bass.frequency.setTargetAtTime(27.5*dop, actx.currentTime, 0.03);
+    }
+    masterG.gain.setTargetAtTime(Math.max(0.001, Math.min(1, L)*0.9), actx.currentTime, 0.03);
+  }
+  drawScene();
+  drawScope();
+  syncStateUI();
+  syncTimeline();
+  const bump = el('bum');
+  const tb = boomT();
+  if (tb !== null && t >= tb && t < tb + 0.8 && t - 0.01 < flashUntil){
+    bump.classList.add('on');
+  } else {
+    bump.classList.remove('on');
+  }
+  requestAnimationFrame(loop);
+}
+/* -------- INIT -------- */
+function init(){
+  resize();
+  setSpeedUI();
+  t = 0;
+  lastT = t;
+  playing = true;
+  btnPlay.setAttribute('aria-pressed','true');
+  el('statusTxt').textContent = 'РЕЖИМ: ЗАПУСТ';
+  el('dot').classList.remove('off');
+  el('playLbl').textContent = 'Пауза';
+  sync();
+  requestAnimationFrame(loop);
+}
+window.addEventListener('resize', resize);
+/* ---- controls ---- */
+const btnPlay = el('btnPlay');
+btnPlay.addEventListener('click', () => {
+  playing = !playing;
+  btnPlay.setAttribute('aria-pressed', playing ? 'true' : 'false');
+  el('statusTxt').textContent = 'РЕЖИМ: ' + (playing ? 'ЗАПУСТ' : 'ПАУЗА');
+  el('dot').classList.toggle('off', !playing);
+  el('playLbl').textContent = playing ? 'Пауза' : 'Воспроизведение';
+});
+const btnSound = el('btnSound');
+btnSound.addEventListener('click', () => {
+  audioOn = !audioOn;
+  if (audioOn){
+    ensureAudio();
+    if (actx && actx.state === 'suspended') actx.resume();
+    boomNode();
+  }
+  btnSound.classList.toggle('on', audioOn);
+  btnSound.classList.toggle('primary', audioOn);
+  btnSound.setAttribute('aria-pressed', audioOn ? 'true' : 'false');
+});
+el('btnReset').addEventListener('click', () => {
+  t = -T0;
+  lastT = t;
+  sync();
+});
+function setMult(m){
+  mult = m;
+  const ts = el('tsGroup');
+  ['1','2','4','8','16'].forEach(s => {
+    const b = ts.querySelector('button[data-m="' + s + '"]');
+    b.classList.toggle('on', s == m);
+  });
+}
+['1','2','4','8','16'].forEach(s => {
+  const b = document.createElement('button');
+  b.dataset.m = s;
+  b.textContent = s + '×';
+  b.title = 'Скорость воспроизведения: ' + s + '×';
+  b.addEventListener('click', () => setMult(parseInt(s, 10)));
+  el('tsGroup').appendChild(b);
+});
+setMult(4);
+['pCivil', 'pMil', 'pSpace'].forEach(id => {
+  el(id).addEventListener('click', () => {
+    const vv = parseInt(el(id).dataset.v, 10);
+    setSpeedKmh(vv);
+    ['pCivil','pMil','pSpace'].forEach(pid => {
+      el(pid).classList.toggle('active', pid === id);
+    });
+  });
+});
+el('speed').addEventListener('input', () => {
+  const val = +el('speed').value;
+  const k = Math.pow(10, logMin + (val/1000)*(logMax-logMin));
+  setSpeedKmh(k);
+});
+const tlRow = el('tlRow');
+let dragging = false;
+tlRow.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  if (playing){
+    el('btnPlay').click();
+  }
+  const rect = tlRow.getBoundingClientRect();
+  const update = (clientX) => {
+    const p = (clientX - rect.left)/rect.width;
+    t = -T0 + 2*T0*p;
+    lastT = t;
+    sync();
+  };
+  dragging = true;
+  const move = (e) => {
+    if (dragging) update(e.clientX);
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', () => {
+    window.removeEventListener('pointermove', move);
+    dragging = false;
+  });
+  update(e.clientX);
+});
+tlRow.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowLeft'){ e.preventDefault(); t = Math.max(-T0, t-5); lastT = t; sync(); }
+  else if (e.key === 'ArrowRight'){ e.preventDefault(); t = Math.min(T0, t+5); lastT = t; sync(); }
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key === ' ' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') {
+    e.preventDefault();
+    btnPlay.click();
+  }
+});
+init();
+</script>
+</body>
+</html>

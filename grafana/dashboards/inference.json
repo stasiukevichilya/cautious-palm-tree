@@ -2,7 +2,7 @@
   "uid": "local-qwen",
   "title": "Local LLM — Qwen & GPU",
   "schemaVersion": 39,
-  "version": 4,
+  "version": 5,
   "editable": true,
   "timezone": "browser",
   "refresh": "15s",
@@ -183,7 +183,7 @@
         "w": 12,
         "h": 4
       },
-      "description": "Оценка Prometheus по счётчику llama.cpp; не биллинг DSH. Короткие запуски между scrape могут быть пропущены. «Из кеша» — токены, взятые из prompt cache / checkpoints без повторной обработки.",
+      "description": "Оценка Prometheus по счётчику llama.cpp. Короткие запуски между scrape могут быть пропущены. «Из кеша» — токены, взятые из prompt cache / checkpoints без повторной обработки.",
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -638,6 +638,69 @@
       }
     },
     {
+      "id": 24,
+      "title": "MTP: принятие по позиции черновика за период",
+      "type": "bargauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 33,
+        "w": 24,
+        "h": 6
+      },
+      "description": "Доля черновиков, в которых основная модель подтвердила токен на этой позиции (0 — первый черновой токен). Число позиций = --spec-draft-n-max. Если доля последней позиции заметно ниже ~0.5, лишняя позиция почти не даёт ускорения и только тратит вычисления; если высокая — можно попробовать n-max на 1 больше (нужен запас VRAM).",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "Нет данных",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.4
+              },
+              {
+                "color": "green",
+                "value": 0.6
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(job, position)(increase(llamacpp:spec_decode_num_accepted_tokens_per_pos_total{job=~\"${model:regex}\"}[$__range])) / on(job) group_left sum by(job)(increase(llamacpp:spec_decode_num_drafts_total{job=~\"${model:regex}\"}[$__range]))",
+          "legendFormat": "{{job}} · позиция {{position}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "options": {
+        "orientation": "vertical",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
       "id": 10,
       "title": "Свободная VRAM сейчас",
       "type": "stat",
@@ -647,7 +710,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 33,
+        "y": 39,
         "w": 12,
         "h": 5
       },
@@ -711,7 +774,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 33,
+        "y": 39,
         "w": 12,
         "h": 5
       },
@@ -758,7 +821,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 38,
+        "y": 44,
         "w": 12,
         "h": 8
       },
@@ -803,7 +866,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 38,
+        "y": 44,
         "w": 12,
         "h": 8
       },
@@ -848,7 +911,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 46,
+        "y": 52,
         "w": 12,
         "h": 8
       },
@@ -893,7 +956,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 46,
+        "y": 52,
         "w": 12,
         "h": 8
       },
@@ -938,7 +1001,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 54,
+        "y": 60,
         "w": 12,
         "h": 8
       },
@@ -983,7 +1046,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 54,
+        "y": 60,
         "w": 12,
         "h": 8
       },
@@ -1028,7 +1091,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 62,
+        "y": 68,
         "w": 8,
         "h": 4
       },
@@ -1072,7 +1135,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 62,
+        "y": 68,
         "w": 16,
         "h": 4
       },
@@ -1112,13 +1175,13 @@
       "title": "Как читать показатели",
       "gridPos": {
         "x": 0,
-        "y": 66,
+        "y": 72,
         "w": 24,
         "h": 5
       },
       "options": {
         "mode": "markdown",
-        "content": "GPU-панели показывают всю нагрузку ПК и не фильтруются по модели. Выбор GPU — по стабильному UUID; в легендах также показано название карты.\n\nВ WSL2 некоторые показатели драйвера могут быть недоступны: «Нет данных» не означает нулевую нагрузку. Метрики токенов берутся из llama.cpp, а не из OpenTelemetry DSH. Профили qwen, qwen-mtp и bonsai-mtp взаимоисключающие: остановленные ожидаемо имеют доступность 0. Данные модели появляются с момента, когда Prometheus начал её опрашивать (job в prometheus.yaml); прошлые запросы не восстанавливаются. Панели MTP заполняются только у моделей со speculative decoding. После перезапуска счётчики сбрасываются; increase учитывает видимые сбросы, но не восстанавливает пропущенные измерения."
+        "content": "GPU-панели показывают всю нагрузку ПК и не фильтруются по модели. Выбор GPU — по стабильному UUID; в легендах также показано название карты.\n\nВ WSL2 некоторые показатели драйвера могут быть недоступны: «Нет данных» не означает нулевую нагрузку. Метрики токенов берутся из llama.cpp. Профили qwen, qwen-mtp и bonsai-mtp взаимоисключающие: остановленные ожидаемо имеют доступность 0. Данные модели появляются с момента, когда Prometheus начал её опрашивать (job в prometheus.yaml); прошлые запросы не восстанавливаются. Панели MTP заполняются только у моделей со speculative decoding: qwen (MTP-голова основного файла модели; отключается QWEN_SPEC_TYPE=none в .env), qwen-mtp и bonsai-mtp. После перезапуска счётчики сбрасываются; increase учитывает видимые сбросы, но не восстанавливает пропущенные измерения."
       }
     }
   ],

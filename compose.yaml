@@ -6,6 +6,25 @@ x-common: &common
     options:
       max-size: 10m
       max-file: '3'
+# PI WEB services share one image (built by piweb-sessiond) and the same /data, workspace and projects.
+x-piweb: &piweb
+  <<: *common
+  profiles: ["piweb"]
+  image: local/ml-piweb:1
+  init: false
+  user: "${PIWEB_UID:-${SDXL_UID:-1000}}:${PIWEB_GID:-${SDXL_GID:-1000}}"
+  # The Docker socket is root-equivalent on the host; agents use it for the projects' own compose stacks.
+  group_add: ["${PIWEB_DOCKER_GID:-0}"]
+  environment:
+    PIWEB_PROJECTS: ${PIWEB_PROJECTS:-${HOME}/git}
+    PI_TELEMETRY: '0'
+  volumes:
+    - ./outputs/piweb/data:/data
+    - ./piweb/models.json:/etc/pi-web/models.json:ro
+    - ${PIWEB_WORKSPACE:-./outputs/piweb/workspace}:/workspace
+    # Same path as on the host, so bind mounts in the projects' compose files resolve via the socket.
+    - ${PIWEB_PROJECTS:-${HOME}/git}:${PIWEB_PROJECTS:-${HOME}/git}
+    - /var/run/docker.sock:/var/run/docker.sock
 services:
   qwen-image:
     <<: *common
@@ -146,6 +165,38 @@ services:
       timeout: 6s
       start_period: 30s
       retries: 4
+  # PI WEB: web UI for Pi Coding Agent on the local LLMs (piweb/models.json). Agent sessions live
+  # in piweb-sessiond; piweb is the browser UI on :8504. See PIWEB-RU.md.
+  piweb-sessiond:
+    <<: *piweb
+    command: ["pi-web-sessiond"]
+    stop_grace_period: 30s
+    build:
+      context: ./piweb
+      args:
+        PIWEB_UID: ${PIWEB_UID:-${SDXL_UID:-1000}}
+        PIWEB_GID: ${PIWEB_GID:-${SDXL_GID:-1000}}
+    healthcheck:
+      test: ["CMD", "test", "-S", "/data/pi-web/sessiond.sock"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 6
+  piweb:
+    <<: *piweb
+    command: ["pi-web-server"]
+    stop_grace_period: 10s
+    ports:
+      - "127.0.0.1:8504:8504"
+    depends_on:
+      piweb-sessiond:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8504/api/pi-web/runtime"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 4
   sdxl:
     <<: *common
     profiles: ["sdxl"]
@@ -218,11 +269,14 @@ services:
       - --split-mode
       - layer
       - --tensor-split
-      - ${QWEN_TENSOR_SPLIT:-0.57,0.43}
+      - ${QWEN_TENSOR_SPLIT:-0.60,0.40}
       - --ctx-size
       - ${QWEN_CTX_SIZE:-196608}
+      # The model file carries an MTP head (blk.64.nextn): lossless speculative decoding.
+      - --spec-type
+      - ${QWEN_SPEC_TYPE:-draft-mtp}
       - --spec-draft-n-max
-      - '2'
+      - ${QWEN_SPEC_DRAFT_N_MAX:-2}
       - --parallel
       - '1'
       - --flash-attn
@@ -231,14 +285,20 @@ services:
       - q8_0
       - --cache-type-v
       - q8_0
+      - --cache-type-k-draft
+      - q8_0
+      - --cache-type-v-draft
+      - q8_0
+      # Host-RAM prompt cache and recurrent-state checkpoints: a diverged history
+      # resumes from the nearest checkpoint instead of a full prefill.
       - --cache-ram
-      - '0'
+      - ${QWEN_CACHE_RAM:-4096}
       - --ctx-checkpoints
-      - '0'
+      - ${QWEN_CTX_CHECKPOINTS:-8}
       - --batch-size
       - '2048'
       - --ubatch-size
-      - ${QWEN_UBATCH_SIZE:-64}
+      - ${QWEN_UBATCH_SIZE:-256}
       - --threads
       - '4'
       - --poll
@@ -249,8 +309,8 @@ services:
       - '-1'
   qwen-mtp:
     # Same model class as qwen, but the RVN Q4_K_M multilingual build with the
-    # embedded MTP head (speculative decoding). Uses its own QWEN_MTP_* variables
-    # and a smaller context to leave VRAM for the MTP draft context.
+    # embedded MTP head (speculative decoding). Uses its own QWEN_MTP_* variables;
+    # tuned like qwen, fully in VRAM with MTP on, ~1 GiB headroom per GPU.
     <<: *common
     profiles: ["qwen-mtp"]
     image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
@@ -281,9 +341,9 @@ services:
       - --split-mode
       - layer
       - --tensor-split
-      - ${QWEN_MTP_TENSOR_SPLIT:-0.57,0.43}
+      - ${QWEN_MTP_TENSOR_SPLIT:-0.60,0.40}
       - --ctx-size
-      - ${QWEN_MTP_CTX_SIZE:-131072}
+      - ${QWEN_MTP_CTX_SIZE:-163840}
       - --spec-type
       - draft-mtp
       - --spec-draft-n-max
@@ -296,14 +356,19 @@ services:
       - q8_0
       - --cache-type-v
       - q8_0
+      - --cache-type-k-draft
+      - q8_0
+      - --cache-type-v-draft
+      - q8_0
+      # Host-RAM prompt cache and recurrent-state checkpoints, as in qwen.
       - --cache-ram
-      - '0'
+      - ${QWEN_MTP_CACHE_RAM:-4096}
       - --ctx-checkpoints
-      - '0'
+      - ${QWEN_MTP_CTX_CHECKPOINTS:-8}
       - --batch-size
       - '2048'
       - --ubatch-size
-      - ${QWEN_MTP_UBATCH_SIZE:-512}
+      - ${QWEN_MTP_UBATCH_SIZE:-256}
       - --threads
       - '4'
       - --poll
@@ -439,16 +504,6 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "127.0.0.1:3055:3000"
-#  grafana-forward:
-#    image: ${SOCAT_IMAGE:-alpine/socat:latest}
-#    restart: unless-stopped
-#    depends_on:
-#      - grafana
-#    ports:
-#      - "127.0.0.1:3055:3055"
-#    command:
-#      - "TCP-LISTEN:3055,fork,reuseaddr,bind=0.0.0.0"
-#      - "TCP:grafana:3000"
   loki:
     image: ${LOKI_IMAGE:-grafana/loki:3.6.13}
     restart: unless-stopped
