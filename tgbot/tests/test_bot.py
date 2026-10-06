@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from app import create_app
 from chat import Reply, Service, User
 from images import Images
-from llm import LLM, Unavailable
+from llm import LLM, ToolCalls, Unavailable
 from market import Market
 from settings import Settings, mask_token
 from store import NotFound, Store
@@ -29,15 +29,21 @@ TOKEN = "123456789:" + "A" * 35
 class FakeLLM:
     def __init__(self):
         self.calls, self.gate, self.fail = [], None, None
+        self.script, self.tools = [], []  # script: per-call lists of deltas (str or ToolCalls)
 
     async def active(self, backends):
         if self.fail:
             raise Unavailable(self.fail)
         return "qwen", backends["qwen"]
 
-    async def stream(self, backends, messages, max_tokens, temperature, timeout):
+    async def stream(self, backends, messages, max_tokens, temperature, timeout, tools=None):
         await self.active(backends)
-        self.calls.append(messages)
+        self.calls.append([dict(m) for m in messages])
+        self.tools.append(tools)
+        if self.script:
+            for delta in self.script.pop(0):
+                yield delta
+            return
         yield "Ответ "
         if self.gate:
             await self.gate.wait()
@@ -45,11 +51,21 @@ class FakeLLM:
 
 
 class FakeImages:
+    def __init__(self):
+        self.prompts, self.fail = [], None
+
     async def active(self, backends):
+        if self.fail:
+            raise Unavailable(self.fail)
         return "sdxl", backends["sdxl"]
 
     async def generate(self, backends, prompt, timeout):
+        self.prompts.append(prompt)
         return "sdxl", b"\x89PNG", 7
+
+
+def draw(prompt, ident="c1"):
+    return ToolCalls([{"id": ident, "name": "generate_image", "arguments": json.dumps({"prompt": prompt})}])
 
 
 class FakeOut:
@@ -188,7 +204,8 @@ class Async(unittest.IsolatedAsyncioTestCase):
         await self.store.open({"admins": [ADMIN.id]})
         self.llm = FakeLLM()
         self.torrents = FakeTorrents()
-        self.service = Service(self.store, self.llm, FakeImages(), torrents=self.torrents)
+        self.images = FakeImages()
+        self.service = Service(self.store, self.llm, self.images, torrents=self.torrents)
         self.notified = []
 
         async def notify(chat_id, reply):
@@ -380,6 +397,59 @@ class ServiceTests(Async):
         self.assertIn("seed 7", out.photos[0][1])
         await self.service.image(ALICE, "  ", out)
         self.assertIn("Использование", out.messages[-1])
+
+
+class ImageToolTests(Async):
+    async def test_llm_draws_and_answers(self):
+        await self.allow(ALICE)
+        self.llm.script = [["Сейчас нарисую.", draw("a red cat")], ["Вот кот."]]
+        out = FakeOut()
+        await self.service.chat(ALICE, "нарисуй кота", out)
+        self.assertEqual(self.images.prompts, ["a red cat"])
+        self.assertEqual(out.photos[0][0], b"\x89PNG")
+        self.assertEqual(out.messages[-1], "Сейчас нарисую.Вот кот.")
+        self.assertEqual(self.llm.tools[0][0]["function"]["name"], "generate_image")
+        second = self.llm.calls[1]
+        self.assertEqual(second[-2]["tool_calls"][0]["function"]["name"], "generate_image")
+        self.assertEqual(second[-2]["content"], "Сейчас нарисую.")
+        self.assertEqual((second[-1]["role"], second[-1]["tool_call_id"]), ("tool", "c1"))
+        self.assertIn("already sent", second[-1]["content"])
+        session = await self.store.active_session(ALICE.id)
+        history = await self.store.history(ALICE.id, session["id"], 10, 10000)
+        self.assertEqual(history[-1]["content"], "Сейчас нарисую.Вот кот.\n[Отправлено изображение: a red cat]")
+
+    async def test_generator_down_is_reported_to_model(self):
+        await self.allow(ALICE)
+        self.images.fail = "Генератор изображений не запущен"
+        self.llm.script = [[draw("a cat")], ["Генератор сейчас выключен."]]
+        out = FakeOut()
+        await self.service.chat(ALICE, "нарисуй", out)
+        self.assertEqual(out.photos, [])
+        self.assertIn("не запущен", self.llm.calls[1][-1]["content"])
+        self.assertEqual(out.messages[-1], "Генератор сейчас выключен.")
+
+    async def test_rounds_are_bounded_and_bad_calls_rejected(self):
+        await self.allow(ALICE)
+        bad = ToolCalls([{"id": "x", "name": "rm_rf", "arguments": "{}"},
+                         {"id": "y", "name": "generate_image", "arguments": "not json"}])
+        self.llm.script = [[bad], [draw("1")], [draw("2")], ["конец"]]
+        out = FakeOut()
+        await self.service.chat(ALICE, "рисуй", out)
+        self.assertIn("unknown tool", self.llm.calls[1][-2]["content"])
+        self.assertIn("prompt argument is required", self.llm.calls[1][-1]["content"])
+        self.assertEqual(self.images.prompts, ["1", "2"])
+        self.assertIsNone(self.llm.tools[-1])  # the last round cannot call tools again
+        self.assertEqual(out.messages[-1], "конец")
+
+    async def test_image_only_answer_and_setting_off(self):
+        await self.allow(ALICE)
+        self.llm.script = [[draw("a dog")], [""]]
+        out = FakeOut()
+        await self.service.chat(ALICE, "собаку", out)
+        self.assertEqual(out.messages[-1], "Готово.")
+        await self.store.update_settings({"image_tool": False})
+        await self.service.chat(ALICE, "ещё", out)
+        self.assertIsNone(self.llm.tools[-1])
 
 
 class MagnetTests(Async):
@@ -714,6 +784,24 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         parts = [x async for x in llm.stream(backends, [], 10, 0.5, 30)]
         self.assertEqual(parts, ["Hel", "lo"])
 
+    async def test_llm_streams_tool_calls(self):
+        def handler(request):
+            if request.url.path == "/health":
+                return httpx.Response(200, json={"status": "ok"})
+            self.assertEqual(json.loads(request.content)["tools"], [{"type": "function"}])
+            events = [{"choices": [{"delta": {"content": "Ok"}}]},
+                      {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "function": {
+                          "name": "generate_image", "arguments": '{"prom'}}]}}]},
+                      {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": 'pt": "x"}'}}]}}]}]
+            text = "".join(f"data: {json.dumps(x)}\n\n" for x in events) + "data: [DONE]\n\n"
+            return httpx.Response(200, text=text)
+
+        llm = LLM(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+        parts = [x async for x in llm.stream({"qwen": "http://qwen:8080"}, [], 10, 0.5, 30, tools=[{"type": "function"}])]
+        self.assertEqual(parts[0], "Ok")
+        self.assertIsInstance(parts[1], ToolCalls)
+        self.assertEqual(list(parts[1]), [{"id": "c1", "name": "generate_image", "arguments": '{"prompt": "x"}'}])
+
     async def test_llm_unavailable(self):
         def handler(request):
             raise httpx.ConnectError("down")
@@ -779,6 +867,32 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(posted["6"]["inputs"]["seed"], seed)
         self.assertEqual(posted["1"]["inputs"]["model_name"], "qwen-image-2.1-Q8_0.gguf")
         self.assertEqual(posted["5"]["inputs"]["device"], "gpu")
+
+
+class FixedWorkflowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fixed_workflow_skips_config(self):
+        posted, paths = {}, []
+
+        def handler(request):
+            paths.append(request.url.path)
+            if request.url.path == "/system_stats":
+                return httpx.Response(200, json={})
+            if request.url.path == "/prompt":
+                posted.update(json.loads(request.content)["prompt"])
+                return httpx.Response(200, json={"prompt_id": "p1"})
+            if request.url.path == "/history/p1":
+                return httpx.Response(200, json={"p1": {"status": {"status_str": "success"}, "outputs": {
+                    "8": {"images": [{"filename": "a.png", "subfolder": "", "type": "output"}]}}}})
+            if request.url.path == "/view":
+                return httpx.Response(200, content=b"png")
+            return httpx.Response(404)
+
+        images = Images(WORKFLOWS, httpx.AsyncClient(transport=httpx.MockTransport(handler)), poll_seconds=0,
+                        workflows={"qwen-image": "qwen-image21"}, prefix="images")
+        name, png, _ = await images.generate({"qwen-image": "http://qwen-image:8188"}, "a cat", 60)
+        self.assertEqual((name, png), ("qwen-image", b"png"))
+        self.assertNotIn("/local-qwen-image/config", paths)
+        self.assertEqual(posted["8"]["inputs"]["filename_prefix"], "images")
 
 
 class FakeRunner:

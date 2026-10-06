@@ -1,0 +1,99 @@
+/* Context ring next to the model selector (agent/webui/loader.js). */
+.ctx-wrap { position: relative; display: flex; align-items: center; }
+.ctx-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 9999px;
+}
+.ctx-btn:hover { background: rgba(127, 127, 127, 0.12); }
+.ctx-btn .ctx-track { fill: none; stroke: currentColor; stroke-opacity: 0.3; stroke-width: 2.2; }
+.ctx-btn .ctx-arc { fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+.ctx-btn { color: #6b7280; }
+.dark .ctx-btn { color: #d1d5db; }
+.ctx-btn.ctx-warm { color: #d97706; }
+.ctx-btn.ctx-hot { color: #dc2626; }
+
+.ctx-pop {
+  position: absolute; bottom: calc(100% + 10px); right: -8px; z-index: 60;
+  width: 290px; padding: 12px 14px; border-radius: 14px; font-size: 12px; line-height: 1.35;
+  background: #ffffff; color: #374151; border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+}
+.dark .ctx-pop { background: #171717; color: #d1d5db; border-color: rgba(255, 255, 255, 0.1); }
+.ctx-title { display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; font-size: 13px; }
+.ctx-title b { color: #111827; }
+.dark .ctx-title b { color: #f9fafb; }
+.ctx-badge {
+  margin-left: auto; padding: 0 6px; border-radius: 9999px; font-size: 10px;
+  background: rgba(99, 102, 241, 0.15); color: #6366f1;
+}
+.ctx-num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.ctx-bar { height: 4px; margin: 10px 0 6px; border-radius: 9999px; background: rgba(127, 127, 127, 0.2); overflow: hidden; }
+.ctx-fill { height: 100%; border-radius: 9999px; background: #9ca3af; }
+.dark .ctx-fill { background: #e5e7eb; }
+.ctx-row { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; }
+.ctx-row .ctx-num { white-space: nowrap; }
+.ctx-muted { color: #6b7280; }
+.dark .ctx-muted { color: #9ca3af; }
+.ctx-strong { font-weight: 600; color: #111827; }
+.dark .ctx-strong { color: #f9fafb; }
+.ctx-head {
+  margin: 8px 0 2px; font-size: 10px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: #9ca3af;
+}
+.ctx-sep { height: 1px; margin: 6px 0; background: rgba(127, 127, 127, 0.2); }
+.ctx-empty { margin-top: 8px; color: #9ca3af; }
+
+/* Per-message token / time / speed line (agent/webui/loader.js), llama.cpp style. */
+.msg-stats {
+  display: flex; flex-wrap: wrap; gap: 14px; margin: 6px 0 2px; font-size: 12px;
+  color: #9ca3af; font-variant-numeric: tabular-nums;
+}
+.msg-stats-user { justify-content: flex-end; }
+.msg-stat { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.msg-stats { align-items: center; }
+.msg-stat, .msg-model { position: relative; }
+.msg-stat svg, .msg-model svg {
+  width: 14px; height: 14px; flex: none; overflow: visible;
+  fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+}
+.msg-model {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: 8px;
+  background: rgba(127, 127, 127, 0.12); color: #374151; white-space: nowrap;
+}
+.dark .msg-model { color: #e5e7eb; background: rgba(255, 255, 255, 0.08); }
+.msg-model-name { font-weight: 600; }
+.msg-badge {
+  padding: 0 5px; border-radius: 9999px; font-size: 10px; line-height: 15px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: rgba(127, 127, 127, 0.18);
+}
+.msg-badge-bili { background: rgba(99, 102, 241, 0.18); color: #6366f1; font-family: inherit; }
+/* Tooltip like the llama.cpp UI. */
+[data-tip]:hover::after {
+  content: attr(data-tip); position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  padding: 4px 9px; border-radius: 8px; font-size: 12px; white-space: nowrap; z-index: 70; pointer-events: none;
+  background: #f3f4f6; color: #111827; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+.dark [data-tip]:hover::after { background: #e5e7eb; color: #111827; }
+.msg-stats-live { color: #6b7280; }
+.dark .msg-stats-live { color: #d1d5db; }
+.msg-stats-live .msg-stat svg { animation: msg-stats-pulse 1.2s ease-in-out infinite; }
+@keyframes msg-stats-pulse { 50% { opacity: 0.35; } }
+
+/* Reasoning effort selector next to the context ring (agent/webui/loader.js). */
+.eff-btn {
+  display: flex; align-items: center; gap: 3px; height: 28px; padding: 0 7px; border-radius: 9999px;
+  font-size: 12px; color: #6b7280; white-space: nowrap;
+}
+.dark .eff-btn { color: #d1d5db; }
+.eff-btn:hover { background: rgba(127, 127, 127, 0.12); }
+.eff-btn svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.eff-btn.eff-set { color: #6366f1; }
+.eff-pop { width: 260px; padding: 8px; }
+.eff-item {
+  display: flex; justify-content: space-between; gap: 8px; width: 100%; padding: 6px 8px; border-radius: 8px;
+  text-align: left; font-size: 13px;
+}
+.eff-item:hover { background: rgba(127, 127, 127, 0.12); }
+.eff-item.eff-active { background: rgba(99, 102, 241, 0.15); color: #6366f1; font-weight: 600; }
+.eff-item .ctx-muted { font-size: 11px; font-weight: 400; }

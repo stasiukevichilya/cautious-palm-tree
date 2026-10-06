@@ -41,6 +41,7 @@ function fill(values) {
   for (const name of NUMBERS) $(name).value = values[name];
   $("llm_backends").value = lines(values.llm_backends);
   $("image_backends").value = lines(values.image_backends);
+  $("image_tool").checked = values.image_tool;
 }
 
 async function refreshStatus() {
@@ -136,6 +137,7 @@ $("settings-form").onsubmit = (event) => {
       system_prompt: $("system_prompt").value,
       llm_backends: parseLines($("llm_backends").value),
       image_backends: parseLines($("image_backends").value),
+      image_tool: $("image_tool").checked,
     };
     for (const name of NUMBERS) values[name] = Number($(name).value);
     fill(await api("/api/settings", { method: "PUT", body: JSON.stringify(values) }));

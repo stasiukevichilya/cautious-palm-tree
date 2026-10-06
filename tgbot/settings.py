@@ -18,6 +18,7 @@ DEFAULTS = {
     "rate_limit_per_min": 10,
     "llm_backends": {"qwen": "http://qwen:8080"},
     "image_backends": {"sdxl": "http://sdxl:8080", "qwen-image": "http://qwen-image:8188"},
+    "image_tool": True,  # the LLM may call generate_image on its own (chat.IMAGE_TOOL)
 }
 
 

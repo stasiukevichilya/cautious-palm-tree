@@ -20,6 +20,14 @@ scrape_configs:
     static_configs:
       - targets: ['torrent:8080']
 
+  - job_name: images
+    static_configs:
+      - targets: ['images:8080']
+
+  - job_name: images-uc
+    static_configs:
+      - targets: ['images-uc:8080']
+
   - job_name: qwen-image
     metrics_path: /local-qwen-image/metrics
     static_configs:

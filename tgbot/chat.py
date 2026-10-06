@@ -6,6 +6,7 @@ HTML (render.py); while it streams it is shown as plain text, since half-written
 import asyncio
 import collections
 import html
+import json
 import logging
 import re
 import secrets
@@ -15,7 +16,7 @@ from dataclasses import dataclass, field
 import httpx
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
-from llm import Unavailable
+from llm import ToolCalls, Unavailable
 from render import render
 from store import NotFound
 from market import Market
@@ -25,6 +26,14 @@ log = logging.getLogger("tgbot")
 EDIT_INTERVAL = 1.5
 IMAGE_PROMPT_LIMIT = 2000
 MAGNET_TTL = 900  # seconds a pending magnet waits for the confirm button
+MAX_TOOL_ROUNDS = 3  # image tool calls per message; the last round is offered no tools
+IMAGE_TOOL = {"type": "function", "function": {
+    "name": "generate_image",
+    "description": "Generate an image with the local image model and send it to the user. Use it when the "
+                   "user asks to draw, generate or show a picture. The user sees the image right away.",
+    "parameters": {"type": "object", "required": ["prompt"], "properties": {"prompt": {
+        "type": "string",
+        "description": "Detailed image description in English: subject, style, composition, lighting."}}}}}
 
 HELP = """Команды:
 /new [название] — новая сессия
@@ -35,7 +44,7 @@ HELP = """Команды:
 /clear — очистить историю активной сессии
 /system [текст] — показать или задать системный промпт сессии (/system reset — сбросить)
 /model — какая LLM и генератор изображений доступны
-/image <промпт> — сгенерировать изображение
+/image <промпт> — сгенерировать изображение (или просто попросите нарисовать в сообщении)
 /cancel — прервать текущий запрос
 /help — эта справка
 
@@ -601,29 +610,77 @@ class Service:
             messages.append({"role": "user", "content": text})
             await self.llm.active(settings["llm_backends"])  # fail before showing a placeholder
             handle = await out.send(Reply("…"))
-            answer, shown, last_edit = "", "…", time.monotonic()
+            answer, shown, last_edit, drawn = "", "…", time.monotonic(), []
+            tools = [IMAGE_TOOL] if settings["image_tool"] else None
             try:
-                async for delta in self.llm.stream(settings["llm_backends"], messages, settings["max_tokens"],
-                                                   settings["temperature"], settings["request_timeout"]):
-                    answer += delta
-                    if time.monotonic() - last_edit >= EDIT_INTERVAL and len(answer) <= 4000:  # past that only the final split shows it
-                        shown, last_edit = answer + " …", time.monotonic()
-                        await out.edit(handle, shown)
+                for round_ in range(MAX_TOOL_ROUNDS + 1):
+                    text_before, calls = len(answer), None
+                    async for delta in self.llm.stream(settings["llm_backends"], messages, settings["max_tokens"],
+                                                       settings["temperature"], settings["request_timeout"],
+                                                       tools=tools if round_ < MAX_TOOL_ROUNDS else None):
+                        if isinstance(delta, ToolCalls):
+                            calls = delta
+                            continue
+                        answer += delta
+                        if time.monotonic() - last_edit >= EDIT_INTERVAL and len(answer) <= 4000:  # past that only the final split shows it
+                            shown, last_edit = answer + " …", time.monotonic()
+                            await out.edit(handle, shown)
+                    if not calls:
+                        break
+                    messages.append({"role": "assistant", "content": answer[text_before:] or None,
+                                     "tool_calls": [{"id": c["id"], "type": "function",
+                                                     "function": {"name": c["name"], "arguments": c["arguments"]}}
+                                                    for c in calls]})
+                    for call in calls:
+                        result = await self.image_tool(call, settings, out, handle, drawn)
+                        messages.append({"role": "tool", "tool_call_id": call["id"], "content": result})
             except asyncio.CancelledError:
-                if answer:  # keep what the user already saw, so the dialogue stays consistent
+                if answer or drawn:  # keep what the user already saw, so the dialogue stays consistent
                     await self.store.add_message(user.id, session["id"], "user", text)
-                    await self.store.add_message(user.id, session["id"], "assistant", answer + "\n[прервано]")
-                    await out.edit(handle, render(answer)[0], html=True)
+                    await self.store.add_message(user.id, session["id"], "assistant",
+                                                 self.with_images(answer, drawn) + "\n[прервано]")
+                    if answer:
+                        await out.edit(handle, render(answer)[0], html=True)
                 raise
-            answer = answer.strip() or "(пустой ответ)"
+            answer = answer.strip() or ("Готово." if drawn else "(пустой ответ)")
             await self.store.add_message(user.id, session["id"], "user", text)
-            await self.store.add_message(user.id, session["id"], "assistant", answer)
+            await self.store.add_message(user.id, session["id"], "assistant", self.with_images(answer, drawn))
             parts = render(answer)
             await out.edit(handle, parts[0], html=True)
             for part in parts[1:]:
                 await out.send(Reply(part, html=True))
 
         await self.run(user, "llm", work, out)
+
+    @staticmethod
+    def with_images(answer, drawn):
+        """History keeps a note of each sent image, so later turns can refer to it."""
+        return "\n".join([answer, *(f"[Отправлено изображение: {prompt}]" for prompt in drawn)]).lstrip()
+
+    async def image_tool(self, call, settings, out, handle, drawn):
+        """Run one generate_image call from the LLM; returns the tool result text for the model."""
+        if call["name"] != "generate_image":
+            return f"Error: unknown tool {call['name']!r}"
+        try:
+            prompt = str(json.loads(call["arguments"] or "{}").get("prompt", "")).strip()[:IMAGE_PROMPT_LIMIT]
+        except (ValueError, AttributeError):
+            prompt = ""
+        if not prompt:
+            return "Error: the prompt argument is required"
+        started = time.monotonic()
+        try:
+            async with self.locks["image"]:  # one generation at a time, shared with /image
+                name, _ = await self.images.active(settings["image_backends"])
+                await out.edit(handle, f"Генерирую изображение ({name})…")
+                name, png, seed = await self.images.generate(settings["image_backends"], prompt,
+                                                             settings["request_timeout"])
+        except Unavailable as error:
+            self.metrics.requests.labels("image_tool", "unavailable").inc()
+            return f"Image generation failed: {error}. Tell the user."
+        self.metrics.requests.labels("image_tool", "ok").inc()
+        await out.photo(png, f"{name}, seed {seed}, {time.monotonic() - started:.0f} с")
+        drawn.append(prompt)
+        return f"The image ({name}, seed {seed}) was generated and already sent to the user."
 
     async def image(self, user, prompt, out):
         prompt = prompt.strip()

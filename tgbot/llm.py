@@ -9,6 +9,10 @@ class Unavailable(Exception):
     pass
 
 
+class ToolCalls(list):
+    """Yielded by LLM.stream after the text when the model asked for tools: [{id, name, arguments}]."""
+
+
 class LLM:
     def __init__(self, client=None, cache_seconds=10):
         self.client = client or httpx.AsyncClient()
@@ -34,10 +38,13 @@ class LLM:
             raise Unavailable("LLM не запущена: выполните make qwen")
         return found
 
-    async def stream(self, backends, messages, max_tokens, temperature, timeout):
-        """Yield text deltas of a chat completion."""
+    async def stream(self, backends, messages, max_tokens, temperature, timeout, tools=None):
+        """Yield text deltas of a chat completion, then ToolCalls if the model called any of tools."""
         name, url = await self.active(backends)
         payload = {"messages": messages, "stream": True, "max_tokens": max_tokens, "temperature": temperature}
+        if tools:
+            payload["tools"] = tools
+        calls = {}  # index -> {id, name, arguments}; OpenAI streams them in fragments
         try:
             async with self.client.stream("POST", f"{url}/v1/chat/completions", json=payload,
                                           timeout=httpx.Timeout(timeout, connect=5)) as response:
@@ -49,11 +56,19 @@ class LLM:
                         continue
                     data = line[5:].strip()
                     if data == "[DONE]":
-                        return
+                        break
                     choices = json.loads(data).get("choices") or [{}]
-                    delta = choices[0].get("delta", {}).get("content")
-                    if delta:
-                        yield delta
+                    delta = choices[0].get("delta", {})
+                    if delta.get("content"):
+                        yield delta["content"]
+                    for fragment in delta.get("tool_calls") or []:
+                        call = calls.setdefault(fragment.get("index", 0), {"id": "", "name": "", "arguments": ""})
+                        function = fragment.get("function") or {}
+                        call["id"] = fragment.get("id") or call["id"]
+                        call["name"] += function.get("name") or ""
+                        call["arguments"] += function.get("arguments") or ""
         except httpx.HTTPError as error:
             self.cached = (0.0, None, None)
             raise Unavailable(f"{name}: {type(error).__name__}") from error
+        if calls:
+            yield ToolCalls(calls[index] for index in sorted(calls))

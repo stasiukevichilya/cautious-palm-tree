@@ -8,6 +8,10 @@ Qwen-Image 2.1 Uncensored: отдельный сервис на одной GPU, 
 [QWEN-IMAGE-UC-RU.md](QWEN-IMAGE-UC-RU.md), `make qwen-image-uc`, интерфейс http://127.0.0.1:8085;
 `make uc-bonsai` — вместе с bonsai-mtp на двух GPU без CPU-offload.
 
+Агент в браузере для локальной сети: Open WebUI на :1098 со всеми LLM стека, скиллами
+Claude Code / pi / opencode, терминалом агента, MCP-генерацией изображений
+(sdxl / qwen-image, отдельно qwen-image-uc) и Blender на Windows (blender-mcp): [agent/README-RU.md](agent/README-RU.md), `make agent`.
+
 Telegram-бот для запущенной LLM и генераторов изображений: [TGBOT-RU.md](TGBOT-RU.md),
 `make tgbot`, настройки http://127.0.0.1:8084.
 
@@ -29,11 +33,6 @@ Telegram-бот для запущенной LLM и генераторов изо
 убрать (hash или его уникальное начало).
 `make torrent`, API http://127.0.0.1:8087 (Bearer TGBOT_ADMIN_KEY). Отключается
 `TGBOT_TORRENT_URL=` в .env. Метрики — в dashboard «Torrent downloads» Grafana.
-
-PI WEB — веб-интерфейс Pi Coding Agent на локальных LLM (qwen, qwen-mtp, bonsai-mtp):
-[PIWEB-RU.md](PIWEB-RU.md), `make piweb`, интерфейс http://127.0.0.1:8504. Агенту
-доступны `outputs/piweb/workspace`, проекты из `PIWEB_PROJECTS` (по умолчанию `~/git`)
-и Docker хоста.
 
 SDXL Base 1.0: отдельный профиль генерации изображений с HTTP API и веб-интерфейсом.
 Подготовка, режимы одной/двух GPU и проверки: [SDXL-RU.md](SDXL-RU.md).

@@ -5,18 +5,18 @@
 
 COMPOSE := docker compose
 INFRA := prometheus grafana tempo otel gpu-exporter loki alloy
-MODEL_PROFILES := --profile qwen --profile qwen-mtp --profile bonsai-mtp --profile sdxl --profile qwen-image --profile qwen-image-uc
-# GID of the Docker socket, so PI WEB agents can drive the host Docker.
-export PIWEB_DOCKER_GID ?= $(shell stat -c %g /var/run/docker.sock 2>/dev/null || echo 0)
+MODEL_PROFILES := --profile qwen --profile qwen-mtp --profile bonsai-mtp --profile sdxl --profile qwen-image --profile qwen-image-uc --profile strata
 SDXL_COMPOSE := $(COMPOSE) -f compose.yaml -f compose.sdxl-dual.yaml
+# GID of the Docker socket, so the agent terminal (Open WebUI) can drive the host Docker.
+export AGENT_DOCKER_GID ?= $(shell stat -c %g /var/run/docker.sock 2>/dev/null || echo 0)
 QWEN_IMAGE_DIT ?= base
 
-.PHONY: help infra qwen qwen-mtp bonsai-mtp bonsai-mtp-build sdxl sdxl-dual sdxl-build sdxl-download sdxl-test models-stop status logs-qwen logs-qwen-mtp logs-bonsai-mtp logs-sdxl stop down
+.PHONY: help infra qwen qwen-mtp bonsai-mtp bonsai-mtp-build strata strata-build logs-strata sdxl sdxl-dual sdxl-build sdxl-download sdxl-test models-stop status logs-qwen logs-qwen-mtp logs-bonsai-mtp logs-sdxl stop down
 .PHONY: uc-bonsai qwen-image-uc qwen-image-uc-build qwen-image-uc-download qwen-image-uc-test qwen-image-uc-browser-test logs-qwen-image-uc
 .PHONY: tgbot tgbot-build tgbot-key tgbot-test tgbot-browser-test logs-tgbot
 .PHONY: scraper scraper-build scraper-test logs-scraper
 .PHONY: torrent torrent-build torrent-test logs-torrent
-.PHONY: piweb piweb-build piweb-stop logs-piweb
+.PHONY: agent agent-key agent-build agent-skills agent-functions agent-stop logs-agent images-build images-test blender-addon
 .PHONY: qwen-image qwen-image-build qwen-image-download qwen-image-download-unsloth qwen-image-unsloth qwen-image-test qwen-image-browser-test logs-qwen-image
 
 help:
@@ -29,8 +29,9 @@ help:
 	@echo "make scraper-build / scraper-test / logs-scraper"
 	@echo "make torrent     - скачивание по magnet из бота (/magnet), API :8087"
 	@echo "make torrent-build / torrent-test / logs-torrent"
-	@echo "make piweb       - PI WEB (Pi Coding Agent) на локальных LLM, UI :8504; модель поднимать отдельно"
-	@echo "make piweb-build / piweb-stop / logs-piweb"
+	@echo "make agent       - Open WebUI в локальной сети :1098 + терминал со скиллами + MCP images; модель поднимать отдельно"
+	@echo "make agent-key / agent-build / agent-skills / agent-functions / agent-stop / logs-agent / images-test"
+	@echo "make blender-addon - поставить аддон blender-mcp в Blender на Windows (BLENDER_VERSION=4.0)"
 	@echo "make qwen-image  - Qwen-Image 2.1 on two GPUs, API/UI :8083"
 	@echo "make qwen-image-build / qwen-image-download / qwen-image-test / qwen-image-browser-test"
 	@echo "make qwen-image-unsloth - the same with unsloth Q8_0 DiT (make qwen-image-download-unsloth first)"
@@ -39,6 +40,8 @@ help:
 	@echo "make qwen-mtp    — Qwen с MTP-спекуляцией (RVN Q4_K_M multilingual mtp), порт :8081; взаимно исключается с make qwen"
 	@echo "make bonsai-mtp  — Ternary-Bonsai-2-27B Uncensored PQ2_0 + MTP (форк PrismML llama.cpp), порт :8089"
 	@echo "make bonsai-mtp-build — собрать образ llama-server PrismML для bonsai-mtp"
+	@echo "make strata      — Qwen3.8-Flash-Next 125B MoE (Strata, IQ2_XS) на двух GPU, порт :8090"
+	@echo "make strata-build / logs-strata — собрать образ Strata (исходники в strata/src) / логи"
 	@echo "make sdxl        — SDXL на одной GPU, API/UI :8082"
 	@echo "make sdxl-dual   — SDXL на двух GPU, API/UI :8082"
 	@echo "make sdxl-build  — собрать образ SDXL"
@@ -56,13 +59,13 @@ infra:
 	$(COMPOSE) up -d $(INFRA)
 
 qwen: infra
-	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen-mtp bonsai-mtp sdxl qwen-image qwen-image-uc
+	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen-mtp bonsai-mtp sdxl qwen-image qwen-image-uc strata
 	$(COMPOSE) --profile qwen up -d --no-deps qwen
 	@echo "Qwen запускается: http://127.0.0.1:8080"
 	@echo "Готовность: curl --fail http://127.0.0.1:8080/health"
 
 qwen-mtp: infra
-	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen bonsai-mtp sdxl qwen-image qwen-image-uc
+	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen bonsai-mtp sdxl qwen-image qwen-image-uc strata
 	$(COMPOSE) --profile qwen-mtp up -d --no-deps qwen-mtp
 	@echo "Qwen MTP запускается: http://127.0.0.1:8081"
 	@echo "Готовность: curl --fail http://127.0.0.1:8081/health"
@@ -72,10 +75,21 @@ bonsai-mtp-build:
 	$(COMPOSE) --profile bonsai-mtp build bonsai-mtp
 
 bonsai-mtp: infra
-	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp sdxl qwen-image qwen-image-uc
+	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp sdxl qwen-image qwen-image-uc strata
 	$(COMPOSE) --profile bonsai-mtp up -d --no-deps bonsai-mtp
 	@echo "Bonsai MTP запускается: http://127.0.0.1:8089"
 	@echo "Готовность: curl --fail http://127.0.0.1:8089/health"
+
+strata-build:
+	$(COMPOSE) --profile strata build strata
+
+strata: infra
+	mkdir -p models/strata/config
+	@[ -e models/strata/config/strata-iq2_xs.shared-settings.json ] || echo '{"reasoning_effort": "low"}' > models/strata/config/strata-iq2_xs.shared-settings.json
+	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp sdxl qwen-image qwen-image-uc
+	$(COMPOSE) --profile strata up -d --no-deps strata
+	@echo "Strata запускается: http://127.0.0.1:8090 (первый старт качает ~76 GB: make logs-strata)"
+	@echo "Готовность: curl --fail http://127.0.0.1:8090/health"
 
 sdxl-build:
 	$(COMPOSE) --profile sdxl build sdxl
@@ -88,13 +102,13 @@ sdxl-test:
 
 sdxl: infra
 	mkdir -p outputs/sdxl
-	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp qwen-image qwen-image-uc
+	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp qwen-image qwen-image-uc strata
 	$(COMPOSE) --profile sdxl up -d --no-deps sdxl
 	@echo "SDXL: http://127.0.0.1:8082"
 
 sdxl-dual: infra
 	mkdir -p outputs/sdxl
-	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp qwen-image qwen-image-uc
+	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp qwen-image qwen-image-uc strata
 	$(SDXL_COMPOSE) --profile sdxl up -d --no-deps sdxl
 	@echo "SDXL dual: http://127.0.0.1:8082"
 
@@ -106,7 +120,7 @@ qwen-image-uc-download:
 
 qwen-image-uc: infra
 	mkdir -p outputs/qwen-image-uc
-	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp sdxl qwen-image
+	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp sdxl qwen-image strata
 	$(COMPOSE) --profile qwen-image-uc up -d --no-deps qwen-image-uc
 	@echo "Qwen-Image UC: http://127.0.0.1:8085"
 
@@ -116,7 +130,7 @@ UC_BONSAI_ENV := QWEN_IMAGE_UC_SHARED=1 BONSAI_MTP_CTX_SIZE=24576 BONSAI_MTP_PAR
 
 uc-bonsai: infra
 	mkdir -p outputs/qwen-image-uc
-	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp sdxl qwen-image
+	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp sdxl qwen-image strata
 	$(UC_BONSAI_ENV) $(COMPOSE) --profile qwen-image-uc --profile bonsai-mtp up -d --no-deps qwen-image-uc bonsai-mtp
 	@echo "Qwen-Image UC: http://127.0.0.1:8085, Bonsai MTP: http://127.0.0.1:8089"
 
@@ -200,21 +214,62 @@ torrent-test:
 logs-torrent:
 	$(COMPOSE) logs --tail=100 -f torrent
 
-piweb-build:
-	$(COMPOSE) --profile piweb build piweb-sessiond
+# Open WebUI + Open Terminal + MCP images: not models, so model switching and models-stop leave them running.
+AGENT_SERVICES := agent-webui agent-terminal images images-uc blender-mcp bili headroom
+BLENDER_VERSION ?= 4.0
+# Skill directories mounted into the terminal; missing ones are created so the bind mounts work.
+AGENT_SKILL_DIRS := $(HOME)/.claude/skills $(HOME)/.agents/skills $(HOME)/.config/opencode/skills \
+  $(HOME)/.pi/skills $(HOME)/.pi/agent/skills $(HOME)/.pi/agent/npm/node_modules
 
-# Не модель: переключение моделей и models-stop оставляют его работать.
-piweb: infra
-	mkdir -p outputs/piweb/data outputs/piweb/workspace
-	$(COMPOSE) --profile piweb up -d --no-deps piweb-sessiond piweb
-	@echo "PI WEB: http://127.0.0.1:8504 (модель: make qwen / qwen-mtp / bonsai-mtp)"
+agent-key:
+	@touch .env
+	@[ ! -s .env ] || [ -z "$$(tail -c1 .env)" ] || echo >> .env
+	@for name in AGENT_SECRET_KEY AGENT_TERMINAL_KEY AGENT_ADMIN_PASSWORD; do \
+	  grep -q "^$$name=" .env && echo "$$name already set in .env" || \
+	  { printf '%s=%s\n' "$$name" "$$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')" >> .env; \
+	    echo "$$name added to .env"; }; done
+	@grep -q '^AGENT_ADMIN_EMAIL=' .env || { echo 'AGENT_ADMIN_EMAIL=admin@ml.local' >> .env; echo "AGENT_ADMIN_EMAIL added to .env"; }
 
-# Остановка sessiond прерывает активные сессии агента.
-piweb-stop:
-	$(COMPOSE) --profile piweb stop piweb piweb-sessiond
+agent-build:
+	$(COMPOSE) --profile agent build images blender-mcp bili headroom
+	$(COMPOSE) --profile agent pull agent-webui agent-terminal
 
-logs-piweb:
-	$(COMPOSE) --profile piweb logs --tail=100 -f piweb-sessiond piweb
+agent: infra
+	@grep -q '^TGBOT_ADMIN_KEY=.\{16,\}' .env || { echo "Add TGBOT_ADMIN_KEY to .env: make tgbot-key"; exit 1; }
+	@for name in AGENT_SECRET_KEY AGENT_TERMINAL_KEY AGENT_ADMIN_EMAIL AGENT_ADMIN_PASSWORD; do grep -q "^$$name=." .env || { echo "Add $$name to .env: make agent-key"; exit 1; }; done
+	mkdir -p outputs/agent/webui outputs/agent/terminal outputs/agent/bili outputs/agent/headroom $(AGENT_SKILL_DIRS)
+	$(COMPOSE) --profile agent up -d --no-deps $(AGENT_SERVICES)
+	@echo "Open WebUI: http://$$(hostname -I | awk '{print $$1}'):1098 (вход: AGENT_ADMIN_EMAIL / AGENT_ADMIN_PASSWORD из .env)"
+
+# Open WebUI filters from agent/functions: Billion context and Headroom toggles, Context usage (run once, and after edits).
+agent-functions:
+	$(COMPOSE) --profile agent exec agent-webui python3 /opt/agent/functions/install.py /opt/agent/functions
+
+# Re-link the host skills after installing or removing some (restarts the terminal only).
+agent-skills:
+	$(COMPOSE) --profile agent restart agent-terminal
+	$(COMPOSE) --profile agent logs --no-log-prefix agent-terminal | grep -E '^skill|skills linked' | tail -60
+
+agent-stop:
+	$(COMPOSE) --profile agent stop $(AGENT_SERVICES)
+
+logs-agent:
+	$(COMPOSE) --profile agent logs --tail=100 -f $(AGENT_SERVICES)
+
+# The addon file comes from the blender-mcp image, so addon and server versions always match.
+blender-addon:
+	@appdata=$$(wslpath "$$(powershell.exe -NoProfile -Command '$$env:APPDATA' | tr -d '\r')") && \
+	  dir="$$appdata/Blender Foundation/Blender/$(BLENDER_VERSION)/scripts/addons" && mkdir -p "$$dir" && \
+	  docker run --rm --entrypoint python local/ml-blender-mcp:1 -c \
+	    "import blender_mcp, pathlib; print((pathlib.Path(blender_mcp.__file__).parent / 'bundled' / 'addon.py').read_text(), end='')" \
+	    > "$$dir/blender_mcp.py" && echo "Addon: $$dir/blender_mcp.py"
+	@echo "Blender: Edit > Preferences > Add-ons > включить 'MCP for Blender'; 3D View > N > MCP for Blender > Start"
+
+images-build:
+	$(COMPOSE) --profile agent build images
+
+images-test:
+	docker run --rm --network none local/ml-images:1 python -m unittest discover -s tests -v
 
 qwen-image-build:
 	$(COMPOSE) --profile qwen-image build qwen-image
@@ -227,7 +282,7 @@ qwen-image-download-unsloth:
 
 qwen-image: infra
 	mkdir -p outputs/qwen-image
-	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp sdxl qwen-image-uc
+	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp sdxl qwen-image-uc strata
 	QWEN_IMAGE_DIT=$(QWEN_IMAGE_DIT) $(COMPOSE) --profile qwen-image up -d --no-deps qwen-image
 	@echo "Qwen-Image ($(QWEN_IMAGE_DIT)): http://127.0.0.1:8083"
 
@@ -249,10 +304,10 @@ qwen-image-browser-test:
 	  local/sdxl-browser-test:1
 
 models-stop:
-	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp sdxl qwen-image qwen-image-uc
+	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp sdxl qwen-image qwen-image-uc strata
 
 status:
-	$(COMPOSE) $(MODEL_PROFILES) --profile piweb ps -a
+	$(COMPOSE) $(MODEL_PROFILES) --profile agent ps -a
 
 logs-qwen:
 	$(COMPOSE) logs --tail=100 -f qwen
@@ -263,6 +318,9 @@ logs-qwen-mtp:
 logs-bonsai-mtp:
 	$(COMPOSE) logs --tail=100 -f bonsai-mtp
 
+logs-strata:
+	$(COMPOSE) logs --tail=100 -f strata
+
 logs-sdxl:
 	$(COMPOSE) logs --tail=100 -f sdxl
 
@@ -270,7 +328,7 @@ logs-qwen-image:
 	$(COMPOSE) logs --tail=100 -f qwen-image
 
 stop:
-	$(COMPOSE) $(MODEL_PROFILES) --profile piweb stop -t 75
+	$(COMPOSE) $(MODEL_PROFILES) --profile agent stop -t 75
 
 down:
-	$(COMPOSE) $(MODEL_PROFILES) --profile piweb down
+	$(COMPOSE) $(MODEL_PROFILES) --profile agent down

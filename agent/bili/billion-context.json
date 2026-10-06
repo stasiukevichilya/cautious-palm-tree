@@ -1,0 +1,12 @@
+{
+  "providers": {
+    "http://qwen:8080/v1": {"models": {"qwen3.8-27b": {"context": 196608}}},
+    "http://qwen-mtp:8080/v1": {"models": {"qwen3.8-27b-mtp": {"context": 163840}}},
+    "http://bonsai-mtp:8080/v1": {"models": {"bonsai2-27b-uc-mtp": {"context": 262144}}},
+    "http://strata:8080/v1": {"models": {"qwen3.8-flash-next-iq2_xs": {"context": 100000}}}
+  },
+  "autoUpdate": false,
+  "advisoryCheck": false,
+  "autoRestartOnUpdate": false,
+  "sessions": {"gc": {"enabled": true, "maxAgeDays": 30}}
+}

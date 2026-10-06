@@ -36,6 +36,7 @@ class SettingsUpdate(BaseModel):
     rate_limit_per_min: int | None = Field(default=None, ge=1, le=600)
     llm_backends: dict[str, HttpUrl] | None = Field(default=None, min_length=1, max_length=10)
     image_backends: dict[Literal["sdxl", "qwen-image"], HttpUrl] | None = Field(default=None, min_length=1)
+    image_tool: bool | None = None
 
     @model_validator(mode="after")
     def only_stack_services(self):

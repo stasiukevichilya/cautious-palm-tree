@@ -11,10 +11,13 @@ from llm import Unavailable
 
 
 class Images:
-    def __init__(self, workflows_path, client=None, poll_seconds=2):
+    def __init__(self, workflows_path, client=None, poll_seconds=2, workflows=None, prefix="tgbot"):
         self.workflows_path = workflows_path
         self.client = client or httpx.AsyncClient()
         self.poll_seconds = poll_seconds
+        # backend name -> fixed workflow, for ComfyUI services without /local-qwen-image/config (qwen-image-uc)
+        self.workflows = workflows or {}
+        self.prefix = prefix
 
     async def active(self, backends):
         for name, url in backends.items():
@@ -25,7 +28,8 @@ class Images:
                 continue
             if response.status_code == 200:
                 return name, url
-        raise Unavailable("Генератор изображений не запущен: выполните make sdxl или make qwen-image")
+        raise Unavailable("Генератор изображений не запущен: выполните "
+                          + " или ".join(f"make {name}" for name in backends))
 
     async def generate(self, backends, prompt, timeout):
         """Returns (generator name, PNG bytes, seed)."""
@@ -35,7 +39,7 @@ class Images:
         try:
             if name == "sdxl":
                 return name, await self.sdxl(url, prompt, seed, deadline), seed
-            return name, await self.comfy(url, prompt, seed, deadline), seed
+            return name, await self.comfy(url, prompt, seed, deadline, self.workflows.get(name)), seed
         except httpx.HTTPError as error:
             raise Unavailable(f"{name}: {type(error).__name__}") from error
 
@@ -65,13 +69,15 @@ class Images:
         graph = copy.deepcopy(json.loads((self.workflows_path / f"{workflow}.api.json").read_text()))
         graph["4"]["inputs"]["prompt"] = prompt
         graph["6"]["inputs"]["seed"] = seed
-        graph["8"]["inputs"]["filename_prefix"] = "tgbot"
+        graph["8"]["inputs"]["filename_prefix"] = self.prefix
         return graph
 
-    async def comfy(self, url, prompt, seed, deadline):
-        config = await self.client.get(f"{url}/local-qwen-image/config", timeout=5)
-        config.raise_for_status()
-        graph = self.comfy_graph(config.json()["workflow"], prompt, seed)
+    async def comfy(self, url, prompt, seed, deadline, workflow=None):
+        if not workflow:
+            config = await self.client.get(f"{url}/local-qwen-image/config", timeout=5)
+            config.raise_for_status()
+            workflow = config.json()["workflow"]
+        graph = self.comfy_graph(workflow, prompt, seed)
         response = await self.client.post(f"{url}/prompt", json={"prompt": graph, "client_id": "tgbot"}, timeout=10)
         if response.status_code != 200:
             raise Unavailable(f"Qwen-Image: HTTP {response.status_code} {response.text[:300]}")

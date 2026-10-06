@@ -5,3 +5,4 @@ __pycache__/
 *.pyc
 miniapps/
 .env.backup-*
+strata/src/
