@@ -156,9 +156,9 @@ curl -s http://127.0.0.1:8088/v1/images/generations -H "Authorization: Bearer $T
   -H 'Content-Type: application/json' -d '{"prompt": "a red teapot", "model": "auto"}'
 ```
 
-Код генерации общий с Telegram-ботом: `tgbot/images.py` копируется в образ `images` при сборке
+Код генерации общий с Telegram-ботом: `services/tgbot/images.py` копируется в образ `images` при сборке
 (additional context `tgbot`). Бот вызывает генерацию через тот же модуль без MCP, см.
-[TGBOT-RU.md](../TGBOT-RU.md).
+[services/TGBOT-RU.md](../services/TGBOT-RU.md).
 
 ## Billion context, Headroom и использование контекста
 
@@ -196,7 +196,7 @@ JSON (SmartCrusher), код (по AST) и текст (локальная ONNX-м
   заголовок `x-headroom-base-url` из конфига подключения, поэтому один контейнер обслуживает все модели.
   Список моделей у этих подключений статический (`model_ids`): `/v1/models` Headroom заголовок не учитывает.
 - **По умолчанию включён** в новых чатах (`defaultFilterIds` в `DEFAULT_MODEL_METADATA`), Billion context —
-  выключен. Почему так — `CTX-BENCH-RU.md`. Выключить можно в меню Integrations у поля ввода.
+  выключен. Почему так — `agent/CTX-BENCH-RU.md`. Выключить можно в меню Integrations у поля ввода.
 - **«Изображение» по умолчанию выключено:** `"defaultFeatureIds": []` в `DEFAULT_MODEL_METADATA`. Если у модели
   в Workspace → Models свои «Default Features», действуют они (у qwen3.8-27b-mtp — веб-поиск и интерпретатор кода).
 - **Если Headroom не отвечает,** фильтр проверяет `/health` (кэш 15 с) и отправляет запрос мимо него со статусом

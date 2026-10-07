@@ -1,0 +1,237 @@
+# Open WebUI and its helpers: terminal, context-compression proxies (bili, headroom), Blender MCP.
+# Part of the single ml-local project: included from ../compose.yaml, paths are relative to this file.
+x-common: &common
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: '3'
+services:
+  # Open WebUI on the LAN (:1098): chats with the local LLMs, skills, MCP image tools, terminal.
+  agent-webui:
+    <<: *common
+    profiles: ["agent"]
+    image: ${AGENT_WEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.11.4}
+    stop_grace_period: 20s
+    command: ["bash", "-c", "cp /opt/agent/webui/loader.js /opt/agent/webui/custom.css /app/build/static/ && exec bash start.sh"]
+    environment:
+      WEBUI_NAME: ${AGENT_WEBUI_NAME:-Local Agent}
+      WEBUI_SECRET_KEY: ${AGENT_SECRET_KEY:-}
+      WEBUI_ADMIN_EMAIL: ${AGENT_ADMIN_EMAIL:-}
+      WEBUI_ADMIN_PASSWORD: ${AGENT_ADMIN_PASSWORD:-}
+      ENABLE_SIGNUP: 'false'
+      # Settings below seed the database on first start; later changes in the admin UI win.
+      # AGENT_RESET_CONFIG=true make agent re-applies them (and drops UI-made admin settings).
+      RESET_CONFIG_ON_START: ${AGENT_RESET_CONFIG:-false}
+      ENABLE_OLLAMA_API: 'false'
+      # The in-browser Pyodide interpreter has its own fake file system; code runs in the terminal instead.
+      ENABLE_CODE_INTERPRETER: 'false'
+      # Every LLM of the stack; only the running one answers (the models are mutually exclusive).
+      # The same three through billion-context, as bili.<model>; the "Billion context" chat toggle switches to them.
+      # strata and bili.strata (indexes 6, 7) are appended last so the bili prefix indexes 3-5 stay put.
+      # Indexes 8-11: the four through Headroom, as hr.<model>; the "Headroom" chat toggle switches to them.
+      # Indexes 12-15: Headroom in front of billion-context, as hb.<model>, for both toggles on.
+      # One headroom serves all four: the x-headroom-base-url header picks the upstream, and the model
+      # lists are static because headroom's /v1/models ignores that header.
+      OPENAI_API_BASE_URLS: >-
+        http://qwen:8080/v1;http://qwen-mtp:8080/v1;http://bonsai-mtp:8080/v1;http://bili:8787/bili/http://qwen:8080/v1;http://bili:8787/bili/http://qwen-mtp:8080/v1;http://bili:8787/bili/http://bonsai-mtp:8080/v1;http://strata:8080/v1;http://bili:8787/bili/http://strata:8080/v1;http://headroom:8787/v1;http://headroom:8787/v1;http://headroom:8787/v1;http://headroom:8787/v1;http://headroom:8787/v1;http://headroom:8787/v1;http://headroom:8787/v1;http://headroom:8787/v1
+      OPENAI_API_KEYS: local;local;local;local;local;local;local;local;local;local;local;local;local;local;local;local
+      OPENAI_API_CONFIGS: >-
+        {"3": {"prefix_id": "bili"}, "4": {"prefix_id": "bili"}, "5": {"prefix_id": "bili"}, "7": {"prefix_id": "bili"},
+         "8": {"prefix_id": "hr", "model_ids": ["qwen3.8-27b"], "headers": {"x-headroom-base-url": "http://qwen:8080"}},
+         "9": {"prefix_id": "hr", "model_ids": ["qwen3.8-27b-mtp"], "headers": {"x-headroom-base-url": "http://qwen-mtp:8080"}},
+         "10": {"prefix_id": "hr", "model_ids": ["bonsai2-27b-uc-mtp"], "headers": {"x-headroom-base-url": "http://bonsai-mtp:8080"}},
+         "11": {"prefix_id": "hr", "model_ids": ["qwen3.8-flash-next-iq2_xs"], "headers": {"x-headroom-base-url": "http://strata:8080"}},
+         "12": {"prefix_id": "hb", "model_ids": ["qwen3.8-27b"], "headers": {"x-headroom-base-url": "http://bili:8787/bili/http://qwen:8080"}},
+         "13": {"prefix_id": "hb", "model_ids": ["qwen3.8-27b-mtp"], "headers": {"x-headroom-base-url": "http://bili:8787/bili/http://qwen-mtp:8080"}},
+         "14": {"prefix_id": "hb", "model_ids": ["bonsai2-27b-uc-mtp"], "headers": {"x-headroom-base-url": "http://bili:8787/bili/http://bonsai-mtp:8080"}},
+         "15": {"prefix_id": "hb", "model_ids": ["qwen3.8-flash-next-iq2_xs"], "headers": {"x-headroom-base-url": "http://bili:8787/bili/http://strata:8080"}}}
+      # Built-in tool categories without a chat toggle are sent with every request (~10K tokens of schemas).
+      # Off for all models; a model can turn one back on in Workspace > Models > Builtin Tools. The rest
+      # (memory, web search, image generation, code interpreter, chat files, skills) follow the chat's toggles.
+      # defaultFilterIds: the Headroom toggle starts on in new chats (CTX-BENCH-RU.md); Billion context stays off.
+      # defaultFeatureIds []: Image (and web search, code interpreter) start off; without the key the chat keeps
+      # whatever state the toggles had before.
+      DEFAULT_MODEL_METADATA: >-
+        {"builtinTools": {"time": false, "user_input": false, "knowledge": false, "chats": false, "notes": false,
+         "channels": false, "tasks": false, "automations": false, "calendar": false, "notifications": false,
+         "subagents": false}, "defaultFilterIds": ["headroom"], "defaultFeatureIds": []}
+      ENABLE_IMAGE_GENERATION: 'true'
+      IMAGE_GENERATION_ENGINE: openai
+      IMAGES_OPENAI_API_BASE_URL: http://images-uc:8080/v1
+      IMAGES_OPENAI_API_KEY: ${TGBOT_ADMIN_KEY:-}
+      IMAGE_GENERATION_MODEL: auto
+      IMAGE_SIZE: 1024x1024
+      # No access_grants: admin-only. Grant groups/users in Admin > Settings > External Tools.
+      TOOL_SERVER_CONNECTIONS: >-
+        [{"type": "mcp", "url": "http://images:8080/mcp", "path": "", "auth_type": "bearer",
+          "key": "${TGBOT_ADMIN_KEY:-}", "config": {"enable": true},
+          "info": {"id": "images", "name": "Images", "description": "SDXL / Qwen-Image"}},
+         {"type": "mcp", "url": "http://images-uc:8080/mcp", "path": "", "auth_type": "bearer",
+          "key": "${TGBOT_ADMIN_KEY:-}", "config": {"enable": true},
+          "info": {"id": "images-uc", "name": "Images UC", "description": "SDXL / Qwen-Image / Qwen-Image Uncensored"}},
+         {"type": "mcp", "url": "http://blender-mcp:8080/mcp", "path": "", "auth_type": "bearer",
+          "key": "${TGBOT_ADMIN_KEY:-}", "config": {"enable": true},
+          "info": {"id": "blender", "name": "Blender", "description": "Blender on Windows (blender-mcp)"}}]
+      TERMINAL_SERVER_CONNECTIONS: >-
+        [{"id": "terminal", "name": "Terminal", "url": "http://agent-terminal:8000", "auth_type": "bearer",
+          "key": "${AGENT_TERMINAL_KEY:-}", "enabled": true, "config": {}}]
+      SCARF_NO_ANALYTICS: 'true'
+      DO_NOT_TRACK: 'true'
+      ANONYMIZED_TELEMETRY: 'false'
+    volumes:
+      - ../outputs/agent/webui:/app/backend/data
+      - ./functions:/opt/agent/functions:ro
+      # loader.js / custom.css: Open WebUI's custom script and style hooks (context ring, per-message stats).
+      # A directory mount, copied in at start: single-file bind mounts break when an editor replaces the file.
+      - ./webui:/opt/agent/webui:ro
+    ports:
+      - "${AGENT_BIND:-0.0.0.0}:1098:8080"
+    networks: [default, agent, agent-uc]
+    # Stopped models' service names are unknown to Docker DNS, and the upstream resolver takes 6-8 s
+    # to say so; that delay would hit every model list refresh.
+    dns_opt: ["timeout:1", "attempts:1"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+      retries: 4
+  # Open Terminal: the agent's shell and file system, plus the host's agent skills (read-only).
+  agent-terminal:
+    <<: *common
+    profiles: ["agent"]
+    image: ${AGENT_TERMINAL_IMAGE:-ghcr.io/open-webui/open-terminal:0.14.0}
+    # Link Claude Code / pi / opencode skills into ~/.cptr/skills, then the image's own entrypoint.
+    entrypoint: ["/usr/bin/tini", "--", "sh", "-c", "python3 /opt/agent/sync_skills.py; exec /app/entrypoint.sh run"]
+    stop_grace_period: 10s
+    # The host's Docker daemon (socket below). The socket is root-equivalent on the host: whoever can chat
+    # with a terminal-enabled model in Open WebUI can run anything there. GID from the socket (Makefile).
+    group_add: ["${AGENT_DOCKER_GID:-0}"]
+    environment:
+      OPEN_TERMINAL_API_KEY: ${AGENT_TERMINAL_KEY:-}
+      HOST_HOME: ${HOME}
+      OPEN_TERMINAL_INFO: >-
+        Projects live in ~/projects (the host's ${AGENT_PROJECTS:-${HOME}/mlstuff/projects}, read-write; changes are
+        real). Work inside a project directory and read its AGENTS.md / CLAUDE.md / README first.
+        Ports 7070-7079 are published to the LAN: run dev servers on 0.0.0.0 with one of them.
+        The host's Docker daemon is available (docker, docker compose). It resolves bind mounts on the host, so
+        run docker / docker compose for a project from ${AGENT_PROJECTS:-${HOME}/mlstuff/projects}/<project>
+        (the same files as ~/projects/<project>), not from ~/projects. Containers it starts are real host
+        containers: do not stop or remove ones you did not create.
+    # Dev servers the agent starts in the terminal (bind 0.0.0.0 inside the container).
+    ports:
+      - "${AGENT_BIND:-0.0.0.0}:7070-7079:7070-7079"
+    volumes:
+      - ../outputs/agent/terminal:/home/user
+      # The host's projects, read-write, so the agent edits them in place.
+      - ${AGENT_PROJECTS:-${HOME}/mlstuff/projects}:/home/user/projects
+      # The same projects at their host path, so bind mounts in their compose files resolve via the socket.
+      - ${AGENT_PROJECTS:-${HOME}/mlstuff/projects}:${AGENT_PROJECTS:-${HOME}/mlstuff/projects}
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./sync_skills.py:/opt/agent/sync_skills.py:ro
+      # make agent creates the skill directories that do not exist yet.
+      - ${HOME}/.claude/skills:/mnt/skills/claude:ro
+      - ${HOME}/.claude/plugins/cache:/mnt/skills/claude-plugins:ro
+      - ${HOME}/.claude/plugins/installed_plugins.json:/mnt/skills/claude-plugins.json:ro
+      - ${HOME}/.agents/skills:/mnt/skills/agents:ro
+      - ${HOME}/.config/opencode/skills:/mnt/skills/opencode:ro
+      - ${HOME}/.pi/skills:/mnt/skills/pi:ro
+      - ${HOME}/.pi/agent/skills:/mnt/skills/pi-agent:ro
+      - ${HOME}/.pi/agent/npm/node_modules:/mnt/skills/pi-packages:ro
+      - ${HOME}/.pi/agent/settings.json:/mnt/skills/pi-settings.json:ro
+    networks: [agent]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8000/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 4
+  # billion-context: context-compression proxy in front of the LLMs (http://bili:8787/bili/<upstream>).
+  # Open WebUI routes a chat through it while the "Billion context" toggle is on. Pinned version,
+  # never self-updates: --no-auto-update in the image entrypoint plus the env/config switches below.
+  bili:
+    <<: *common
+    profiles: ["agent"]
+    build:
+      context: ./bili
+    image: local/ml-bili:1
+    init: true
+    environment:
+      BILI_CONFIG_FILE: /etc/billion-context.json
+      BILI_TUNNEL_ALLOWED_HOSTS: qwen:8080,qwen-mtp:8080,bonsai-mtp:8080,strata:8080
+      ACP_AUTO_UPDATE: '0'
+      BILI_ADVISORY_CHECK: '0'
+    volumes:
+      - ./bili/billion-context.json:/etc/billion-context.json:ro
+      - ../outputs/agent/bili:/data
+    networks: [default]
+    dns_opt: ["timeout:1", "attempts:1"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/__bili/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 6s
+      start_period: 20s
+      retries: 4
+  # Headroom: compresses tool outputs, logs, JSON and code in the prompt before it reaches the LLM
+  # (http://headroom:8787/v1, upstream from the x-headroom-base-url header). Open WebUI routes a chat
+  # through it while the "Headroom" toggle is on, independently of Billion context. Pinned version,
+  # telemetry and update checks off (image env). Published on 127.0.0.1:8091 only, for pi / opencode on the
+  # host (they send x-headroom-base-url themselves); the unauthenticated bind is acknowledged.
+  headroom:
+    <<: *common
+    profiles: ["agent"]
+    build:
+      context: ./headroom
+    image: local/ml-headroom:1
+    init: true
+    environment:
+      # bili: the hb.<model> chain (headroom -> billion-context -> model).
+      HEADROOM_ALLOWED_BASE_URLS: http://qwen:8080,http://qwen-mtp:8080,http://bonsai-mtp:8080,http://strata:8080,http://bili:8787
+      HEADROOM_ALLOW_UNAUTHENTICATED_BIND: '1'
+      # Fallback upstream for requests without the header (and for /v1/models).
+      OPENAI_TARGET_API_URL: http://qwen-mtp:8080
+      # Real windows (unknown models default to 128K). Names as Open WebUI and pi / opencode send them.
+      HEADROOM_MODEL_LIMITS: >-
+        {"openai": {"context_limits": {"qwen3.8-27b": 196608, "qwen3.8-27b-mtp": 163840,
+        "qwen3.8-27b-uc-mtp": 163840, "bonsai2-27b-uc-mtp": 262144, "bonsai-27b-uc-mtp": 262144,
+        "qwen3.8-flash-next-iq2_xs": 131072}}}
+    volumes:
+      - ../outputs/agent/headroom:/data
+    ports:
+      - 127.0.0.1:8091:8787
+    networks: [default]
+    dns_opt: ["timeout:1", "attempts:1"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/health', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      start_period: 60s
+      retries: 4
+  # blender-mcp (mcp-for-blender) over streamable HTTP: drives Blender on Windows, where the addon
+  # listens on localhost:9876 (Docker Desktop forwards host.docker.internal to the Windows loopback).
+  # Telemetry is off, see agent/blender-mcp/run.py. Install the addon: make blender-addon.
+  blender-mcp:
+    <<: *common
+    profiles: ["agent"]
+    build:
+      context: ./blender-mcp
+    image: local/ml-blender-mcp:1
+    init: true
+    environment:
+      BLENDER_MCP_API_KEY: ${TGBOT_ADMIN_KEY:-}
+      BLENDER_HOST: ${BLENDER_HOST:-host.docker.internal}
+      BLENDER_PORT: ${BLENDER_PORT:-9876}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    networks: [agent]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      start_period: 20s
+      retries: 4
+networks:
+  agent:
+  agent-uc:

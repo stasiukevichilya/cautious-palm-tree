@@ -4,7 +4,7 @@ description: Toggle in the chat: route this chat through the Headroom prompt-com
 version: 1.1.0
 """
 # Installed by `make agent-functions` (agent/functions/install.py). The hr.<model> copies come from the
-# http://headroom:8787/v1 connections with prefix_id "hr" in compose.yaml, hb.<model> from those with "hb".
+# http://headroom:8787/v1 connections with prefix_id "hr" in agent/compose.yaml, hb.<model> from those with "hb".
 
 import time
 

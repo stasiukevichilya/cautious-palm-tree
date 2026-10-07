@@ -1,5 +1,5 @@
 // Context ring next to the model selector and per-message token/time lines, like the llama.cpp web UI.
-// Served as /static/loader.js (Open WebUI's custom script hook, see compose.yaml). Data comes from
+// Served as /static/loader.js (Open WebUI's custom script hook, see agent/compose.yaml). Data comes from
 // message.contextStats, written by the Context usage filter (agent/functions/context_usage.py).
 // While a message streams, the line is live: llama.cpp timings_per_token (requested by that filter)
 // reach the browser as socket.io "events" / chat:completion usage, read here off the WebSocket.

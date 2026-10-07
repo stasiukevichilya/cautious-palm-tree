@@ -124,6 +124,15 @@ def repo_file(path, limit=40000):
     return (REPO / path).read_text(errors="replace")[:limit]
 
 
+# compose.yaml and the Makefile are split into group files; the agent "reads" them as one, as before the split.
+GROUPS = ["observability", "llm", "imagegen", "agent", "services"]
+GROUP_FILES = {"compose.yaml": [f"{g}/compose.yaml" for g in GROUPS], "Makefile": [f"{g}/{g}.mk" for g in GROUPS]}
+
+
+def repo_cat(*paths, limit=40000):
+    return "\n".join(f"# --- {p}\n{(REPO / p).read_text(errors='replace')}" for p in paths)[:limit]
+
+
 def shell(cmd):
     # No git in the image: the git log is captured on the host (agent/bench/run.sh).
     if cmd.startswith("git "):
@@ -140,23 +149,23 @@ def trajectory():
         ("http_get", {"url": "https://tracker.local/api/issues?label=payments&per_page=140"}, issues_json(rng)),
         ("read_file", {"path": "config/payments.toml"}, payments_toml(rng)),
         ("run", {"cmd": "kubectl logs deploy/payments-worker --since=1h"}, staging_logs(rng, 400)),
-        ("read_file", {"path": "compose.yaml"}, repo_file("compose.yaml")),
-        ("read_file", {"path": "Makefile"}, repo_file("Makefile")),
-        ("read_file", {"path": "tgbot/chat.py"}, repo_file("tgbot/chat.py")),
+        ("read_file", {"path": "compose.yaml"}, repo_cat("compose.yaml", *GROUP_FILES["compose.yaml"])),
+        ("read_file", {"path": "Makefile"}, repo_cat("Makefile", *GROUP_FILES["Makefile"])),
+        ("read_file", {"path": "tgbot/chat.py"}, repo_file("services/tgbot/chat.py")),
         ("http_get", {"url": "https://prom.local/api/v1/query_range?query=payments_batch_duration_seconds"}, metrics_json(rng)),
-        ("read_file", {"path": "tgbot/app.py"}, repo_file("tgbot/app.py")),
+        ("read_file", {"path": "tgbot/app.py"}, repo_file("services/tgbot/app.py")),
         ("run", {"cmd": "grep -rn 'def ' --include=*.py ."}, shell("grep -rn 'def ' --include=*.py tgbot agent")),
-        ("read_file", {"path": "tgbot/tests/test_bot.py"}, repo_file("tgbot/tests/test_bot.py")),
+        ("read_file", {"path": "tgbot/tests/test_bot.py"}, repo_file("services/tgbot/tests/test_bot.py")),
         ("read_file", {"path": "README-RU.md"}, repo_file("README-RU.md")),
         ("run", {"cmd": "kubectl logs deploy/payments-worker --previous"}, staging_logs(random.Random(7), 200, needle=False)),
         ("read_file", {"path": "agent/README-RU.md"}, repo_file("agent/README-RU.md")),
-        ("read_file", {"path": "tgbot/llm.py"}, repo_file("tgbot/llm.py")),
-        ("read_file", {"path": "tgbot/images.py"}, repo_file("tgbot/images.py")),
+        ("read_file", {"path": "tgbot/llm.py"}, repo_file("services/tgbot/llm.py")),
+        ("read_file", {"path": "tgbot/images.py"}, repo_file("services/tgbot/images.py")),
         ("http_get", {"url": "https://tracker.local/api/issues?label=infra&per_page=60"}, issues_json(random.Random(9), 60, needle=False)),
         ("read_file", {"path": "agent/sync_skills.py"}, repo_file("agent/sync_skills.py")),
-        ("read_file", {"path": "tgbot/static/app.js"}, repo_file("tgbot/static/app.js")),
+        ("read_file", {"path": "tgbot/static/app.js"}, repo_file("services/tgbot/static/app.js")),
         ("run", {"cmd": "ls -la tgbot agent agent/functions"}, shell("ls -la tgbot agent agent/functions")),
-        ("read_file", {"path": "tgbot/settings.py"}, repo_file("tgbot/settings.py")),
+        ("read_file", {"path": "tgbot/settings.py"}, repo_file("services/tgbot/settings.py")),
     ]
 
 

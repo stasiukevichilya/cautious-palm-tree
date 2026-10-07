@@ -1,0 +1,174 @@
+# Image generation: generators (sdxl, qwen-image, qwen-image-uc) and their API / MCP front ends
+# (images, images-uc), which run only while a generator they serve runs (make images-sync).
+# Part of the single ml-local project: included from ../compose.yaml, paths are relative to this file.
+x-common: &common
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: '3'
+services:
+  sdxl:
+    <<: *common
+    profiles: ["sdxl"]
+    build:
+      context: ./sdxl
+      args:
+        SDXL_BASE_IMAGE: ${SDXL_BASE_IMAGE:-pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime@sha256:c16f4c749e2d9e96878875cdf6cc45cddda1d1a36fddd371dd6f2360f1b6e2a2}
+    image: local/ml-sdxl:1
+    init: true
+    user: "${SDXL_UID:-1000}:${SDXL_GID:-1000}"
+    stop_grace_period: 75s
+    environment:
+      SDXL_MODE: single
+      CUDA_VISIBLE_DEVICES: ${SDXL_GPU0:-0}
+      NVIDIA_VISIBLE_DEVICES: ${SDXL_GPU0:-0}
+      SDXL_QUEUE_SIZE: ${SDXL_QUEUE_SIZE:-4}
+      SDXL_MAX_RESULTS: ${SDXL_MAX_RESULTS:-100}
+      SDXL_RETENTION_HOURS: ${SDXL_RETENTION_HOURS:-168}
+      SDXL_VAE_TILING: ${SDXL_VAE_TILING:-1}
+      SDXL_VRAM_RESERVE_GIB: ${SDXL_VRAM_RESERVE_GIB:-1.5}
+      SDXL_GPU0_BUDGET: ${SDXL_GPU0_BUDGET:-11GiB}
+      SDXL_GPU1_BUDGET: ${SDXL_GPU1_BUDGET:-9GiB}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${SDXL_GPU0:-0}"]
+              capabilities: [gpu]
+    volumes:
+      - ../models/sdxl-base-1.0:/models:ro
+      - ../outputs/sdxl:/outputs
+    ports:
+      - "127.0.0.1:8082:8080"
+    # agent-uc: images-uc (Open WebUI's image generation) reaches it too; the bot is not on that network.
+    networks: [default, agent-uc]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      start_period: 180s
+      retries: 4
+  qwen-image:
+    <<: *common
+    profiles: ["qwen-image"]
+    build:
+      context: ./qwen-image
+    image: local/ml-qwen-image:1
+    init: true
+    user: "${QWEN_IMAGE_UID:-${SDXL_UID:-1000}}:${QWEN_IMAGE_GID:-${SDXL_GID:-1000}}"
+    stop_grace_period: 75s
+    environment:
+      CUDA_VISIBLE_DEVICES: ${QWEN_IMAGE_GPU0:-${SDXL_GPU0:-0}},${QWEN_IMAGE_GPU1:-${SDXL_GPU1:-1}}
+      NVIDIA_VISIBLE_DEVICES: ${QWEN_IMAGE_GPU0:-${SDXL_GPU0:-0}},${QWEN_IMAGE_GPU1:-${SDXL_GPU1:-1}}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      QWEN_IMAGE_VRAM_RESERVE_GIB: ${QWEN_IMAGE_VRAM_RESERVE_GIB:-1.5}
+      QWEN_IMAGE_DIT: ${QWEN_IMAGE_DIT:-base}
+    gpus: all
+    volumes:
+      - ../models/qwen-image-2.1:/models:ro
+      - ../outputs/qwen-image:/data
+    ports:
+      - "127.0.0.1:8083:8188"
+    # agent-uc: images-uc (Open WebUI's image generation) reaches it too; the bot is not on that network.
+    networks: [default, agent-uc]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8188/system_stats', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      start_period: 120s
+      retries: 4
+  qwen-image-uc:
+    <<: *common
+    profiles: ["qwen-image-uc"]
+    build:
+      context: ./qwen-image-uc
+      additional_contexts:
+        qwenimage: ./qwen-image
+    image: local/ml-qwen-image-uc:1
+    init: true
+    user: "${QWEN_IMAGE_UID:-${SDXL_UID:-1000}}:${QWEN_IMAGE_GID:-${SDXL_GID:-1000}}"
+    stop_grace_period: 75s
+    environment:
+      # QWEN_IMAGE_UC_SHARED=1 (make uc-bonsai): text encoder on the second GPU instead of the CPU and fixed
+      # VRAM caps on both GPUs, so bonsai-mtp fits next to it. See QWEN-IMAGE-UC-RU.md.
+      CUDA_VISIBLE_DEVICES: ${QWEN_IMAGE_UC_GPU:-${QWEN_IMAGE_GPU0:-${SDXL_GPU0:-0}}}${QWEN_IMAGE_UC_SHARED:+,${QWEN_IMAGE_UC_ENCODER_GPU:-${QWEN_IMAGE_GPU1:-${SDXL_GPU1:-1}}}}
+      NVIDIA_VISIBLE_DEVICES: ${QWEN_IMAGE_UC_GPU:-${QWEN_IMAGE_GPU0:-${SDXL_GPU0:-0}}}${QWEN_IMAGE_UC_SHARED:+,${QWEN_IMAGE_UC_ENCODER_GPU:-${QWEN_IMAGE_GPU1:-${SDXL_GPU1:-1}}}}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      QWEN_IMAGE_UC_VRAM_RESERVE_GIB: ${QWEN_IMAGE_UC_VRAM_RESERVE_GIB:-1.5}
+      QWEN_IMAGE_UC_ENCODER_DEVICE: ${QWEN_IMAGE_UC_SHARED:+gpu}
+      QWEN_IMAGE_UC_VRAM_GIB: ${QWEN_IMAGE_UC_SHARED:+${QWEN_IMAGE_UC_VRAM_GIB:-7.25}}
+      QWEN_IMAGE_UC_ENCODER_VRAM_GIB: ${QWEN_IMAGE_UC_ENCODER_VRAM_GIB:-7.75}
+    gpus: all
+    # Own network only: other services (the Telegram bot included) cannot resolve or reach it.
+    networks: [qwen-image-uc]
+    volumes:
+      - ../models/qwen-image-2.1-uc:/models:ro
+      - ../outputs/qwen-image-uc:/data
+    ports:
+      - "127.0.0.1:8085:8188"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8188/system_stats', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      start_period: 120s
+      retries: 4
+  # Image generation for agents: MCP tool generate_image (/mcp) and OpenAI /v1/images/generations
+  # over whichever of sdxl / qwen-image is running. No GPU of its own. See agent/README-RU.md.
+  images:
+    <<: *common
+    profiles: ["agent"]
+    build:
+      context: ./images
+      additional_contexts:
+        tgbot: ../services/tgbot
+    image: local/ml-images:1
+    init: true
+    user: "${IMAGES_UID:-${SDXL_UID:-1000}}:${IMAGES_GID:-${SDXL_GID:-1000}}"
+    environment:
+      IMAGES_API_KEY: ${TGBOT_ADMIN_KEY:-}
+      IMAGES_BACKENDS: '{"sdxl": "http://sdxl:8080", "qwen-image": "http://qwen-image:8188"}'
+    volumes:
+      - ./qwen-image/workflows:/workflows:ro
+    ports:
+      - "127.0.0.1:8088:8080"
+    # Stopped generators are unknown names to Docker DNS; fail fast instead of 6-8 s per probe.
+    dns_opt: ["timeout:1", "attempts:1"]
+    healthcheck: &images-health
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      start_period: 20s
+      retries: 4
+  # Open WebUI's image generation (Image button, built-in generate_image, MCP "Images UC"): sdxl,
+  # qwen-image and qwen-image-uc, first running wins. Only Open WebUI (network agent-uc) can reach it,
+  # the bot cannot.
+  images-uc:
+    <<: *common
+    profiles: ["agent"]
+    build:
+      context: ./images
+      additional_contexts:
+        tgbot: ../services/tgbot
+    image: local/ml-images:1
+    init: true
+    user: "${IMAGES_UID:-${SDXL_UID:-1000}}:${IMAGES_GID:-${SDXL_GID:-1000}}"
+    environment:
+      IMAGES_NAME: images-uc
+      IMAGES_API_KEY: ${TGBOT_ADMIN_KEY:-}
+      IMAGES_BACKENDS: >-
+        {"sdxl": "http://sdxl:8080", "qwen-image": "http://qwen-image:8188", "qwen-image-uc": "http://qwen-image-uc:8188"}
+      # An absolute workflow path: qwen-image's workflows are in /workflows, the uc one is not.
+      IMAGES_WORKFLOWS: '{"qwen-image-uc": "/workflows-uc/qwen-image21-uc"}'
+    volumes:
+      - ./qwen-image/workflows:/workflows:ro
+      - ./qwen-image-uc/workflows:/workflows-uc:ro
+    networks: [qwen-image-uc, agent-uc]
+    dns_opt: ["timeout:1", "attempts:1"]
+    healthcheck: *images-health
+networks:
+  qwen-image-uc:
+  agent-uc:

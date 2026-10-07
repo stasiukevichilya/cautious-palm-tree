@@ -1,18 +1,36 @@
 Локальный Qwen3.8-27B: RTX 4070 Ti SUPER 16 GiB + RTX 3080 Ti 12 GiB
 
+## Структура
+
+Один Compose-проект `ml-local` и один `Makefile` в корне: всё запускается и останавливается отсюда
+(`make help`). Корневой `compose.yaml` только подключает (`include`) файлы групп, корневой `Makefile` —
+их `*.mk`. Пути внутри файла группы — относительно его папки; переменные — из корневого `.env`.
+
+| Папка | Что внутри | Цели |
+|---|---|---|
+| `llm/` | языковые модели: qwen, qwen-mtp, bonsai-mtp (`bonsai/`), Strata (`strata/src`, отдельный git) | `make qwen`, `qwen-mtp`, `bonsai-mtp`, `strata` |
+| `imagegen/` | генераторы sdxl, qwen-image, qwen-image-uc и их API/MCP-фронты images, images-uc | `make sdxl`, `qwen-image`, `qwen-image-uc`, `uc-bonsai`, `images-sync` |
+| `agent/` | Open WebUI, терминал агента, прокси сжатия bili и headroom, blender-mcp, бенчмарк сжатия | `make agent`, `agent-functions` |
+| `services/` | Telegram-бот, scraper, torrent, miniapps | `make tgbot`, `scraper`, `torrent` |
+| `observability/` | Prometheus, Grafana, Tempo, Loki, Alloy, OTel, GPU exporter и их конфиги | `make infra` |
+
+В каждой группе: `compose.yaml`, `<группа>.mk`, исходники сервисов, `scripts/` (загрузка весов, smoke-тесты) и
+документация. Данные остаются в корне: веса — `models/`, результаты и состояние — `outputs/`. Скрипты из
+`scripts/` и все пути в документации — от корня репозитория.
+
 Qwen-Image 2.1: полный генератор с Heretic GGUF-энкодером на двух GPU,
-ComfyUI и HTTP API. [Подготовка и запуск](QWEN-IMAGE-RU.md): `make qwen-image`,
+ComfyUI и HTTP API. [Подготовка и запуск](imagegen/QWEN-IMAGE-RU.md): `make qwen-image`,
 интерфейс http://127.0.0.1:8083. Вариант с DiT unsloth Q8_0: `make qwen-image-unsloth`.
 
 Qwen-Image 2.1 Uncensored: отдельный сервис на одной GPU, недоступный боту:
-[QWEN-IMAGE-UC-RU.md](QWEN-IMAGE-UC-RU.md), `make qwen-image-uc`, интерфейс http://127.0.0.1:8085;
+[imagegen/QWEN-IMAGE-UC-RU.md](imagegen/QWEN-IMAGE-UC-RU.md), `make qwen-image-uc`, интерфейс http://127.0.0.1:8085;
 `make uc-bonsai` — вместе с bonsai-mtp на двух GPU без CPU-offload.
 
 Агент в браузере для локальной сети: Open WebUI на :1098 со всеми LLM стека, скиллами
 Claude Code / pi / opencode, терминалом агента, MCP-генерацией изображений
 (sdxl / qwen-image, отдельно qwen-image-uc) и Blender на Windows (blender-mcp): [agent/README-RU.md](agent/README-RU.md), `make agent`.
 
-Telegram-бот для запущенной LLM и генераторов изображений: [TGBOT-RU.md](TGBOT-RU.md),
+Telegram-бот для запущенной LLM и генераторов изображений: [services/TGBOT-RU.md](services/TGBOT-RU.md),
 `make tgbot`, настройки http://127.0.0.1:8084.
 
  Мониторинг БУ-объявлений (Kufar, Onliner): новые объявления и падения цен уходят
@@ -23,7 +41,7 @@ Telegram-бот для запущенной LLM и генераторов изо
 `make scraper`, API http://127.0.0.1:8086 (Bearer TGBOT_ADMIN_KEY):
 `POST /api/scrape` — прогон сейчас, `POST /api/report` — отчёт сейчас,
 `GET /api/watches` — что отслеживается, `GET /api/items` — отслеживаемые товары.
-Состав системного отслеживания: `scraper/watch.json` и API; пользовательские
+Состав системного отслеживания: `services/scraper/watch.json` и API; пользовательские
 запросы и товары добавляются через бота и хранятся в базе скрейпера.
 
 Скачивание торрентов по magnet-ссылке из Telegram-бота (только администратор):
@@ -35,18 +53,18 @@ Telegram-бот для запущенной LLM и генераторов изо
 `TGBOT_TORRENT_URL=` в .env. Метрики — в dashboard «Torrent downloads» Grafana.
 
 SDXL Base 1.0: отдельный профиль генерации изображений с HTTP API и веб-интерфейсом.
-Подготовка, режимы одной/двух GPU и проверки: [SDXL-RU.md](SDXL-RU.md).
+Подготовка, режимы одной/двух GPU и проверки: [imagegen/SDXL-RU.md](imagegen/SDXL-RU.md).
 Запуск после подготовки: `make sdxl`, интерфейс http://127.0.0.1:8082.
 Сервис LLM называется `qwen`; управление: `make qwen`, `make models-stop`.
 Альтернативы (взаимоисключающие): `make qwen-mtp` (:8081) и `make bonsai-mtp` (:8089) —
 Ternary-Bonsai-2-27B Uncensored PQ2_0 + MTP. Bonsai работает только на форке PrismML
-llama.cpp, поэтому у него свой образ `bonsai/Dockerfile` (`make bonsai-mtp-build`) и
-переменные `BONSAI_MTP_*` (модель, GPU, split, контекст, слоты, MTP, ubatch, кеши) в compose.yaml.
+llama.cpp, поэтому у него свой образ `llm/bonsai/Dockerfile` (`make bonsai-mtp-build`) и
+переменные `BONSAI_MTP_*` (модель, GPU, split, контекст, слоты, MTP, ubatch, кеши) в llm/compose.yaml.
 Текущий порт Grafana: http://127.0.0.1:3055.
 
 Текущая конфигурация `qwen`: Qwen3.8-27B Q4_K_M, контекст 196608, K/V q8_0, один слот, layer split 0.60/0.40, ubatch 256, MTP-спекуляция (`--spec-type draft-mtp`, 2 черновых токена; MTP-голова `blk.64.nextn` есть и в Uncensored, и в UD-файле), prompt cache в RAM 4 GiB и 8 context checkpoints. Только текст, mmproj не загружается.
 
-Замер `python3 bench-qwen.py` (чат-запрос «ревью кода», temperature 0, 768 токенов; 4070 Ti SUPER + 3080 Ti, 03.10.2026):
+Замер `python3 llm/scripts/bench-qwen.py` (чат-запрос «ревью кода», temperature 0, 768 токенов; 4070 Ti SUPER + 3080 Ti, 03.10.2026):
 
 | Промпт | Генерация без MTP | С MTP (n=2) | Prefill без MTP → с MTP |
 |---:|---:|---:|---:|
@@ -57,7 +75,7 @@ llama.cpp, поэтому у него свой образ `bonsai/Dockerfile` (`
 
 Доля принятых черновых токенов 68–82%. Спекуляция не меняет распределение модели (каждый черновой токен проверяет основная модель), но жадный вывод не побайтово совпадает с режимом без MTP: пакетная проверка дает другие округления, и тексты расходятся через сотни символов. MTP-контексту нужно ~1.3 GiB на CUDA1 (KV 408 MiB + compute ~0.9 GiB), поэтому ubatch уменьшен до 256 и split сдвинут на CUDA0; свободно ~0.55 GiB на каждой GPU. n=3 быстрее только на длинном контексте и съедает запас VRAM. Отключить MTP: `QWEN_SPEC_TYPE=none` в .env (тогда можно вернуть QWEN_UBATCH_SIZE=512 и split 0.57,0.43).
 
-Конфигурация `qwen-mtp` (RVN Q4_K_M multilingual + MTP): контекст 163840 целиком в VRAM, K/V и K/V черновика q8_0, ubatch 256, split 0.60/0.40, prompt cache 4 GiB и 8 checkpoints. Контекст выбран с запасом ~1 GiB на каждой GPU. Максимум — 196608 при split 0.62/0.38 (MTP-голова и ее compute-буфер ~0.9 GiB на CUDA1), но тогда на пике свободно лишь ~0.36 / 0.58 GiB. При 0.57/0.43 и ubatch 512 MTP-контекст не создается (OOM на CUDA1). Замер `python3 bench-qwen.py --url http://127.0.0.1:8081` (05.10.2026):
+Конфигурация `qwen-mtp` (RVN Q4_K_M multilingual + MTP): контекст 163840 целиком в VRAM, K/V и K/V черновика q8_0, ubatch 256, split 0.60/0.40, prompt cache 4 GiB и 8 checkpoints. Контекст выбран с запасом ~1 GiB на каждой GPU. Максимум — 196608 при split 0.62/0.38 (MTP-голова и ее compute-буфер ~0.9 GiB на CUDA1), но тогда на пике свободно лишь ~0.36 / 0.58 GiB. При 0.57/0.43 и ubatch 512 MTP-контекст не создается (OOM на CUDA1). Замер `python3 llm/scripts/bench-qwen.py --url http://127.0.0.1:8081` (05.10.2026):
 
 | Промпт | Prefill | Генерация n=2 | Свободно CUDA0 / CUDA1 (пик) |
 |---:|---:|---:|---:|
@@ -117,7 +135,7 @@ bash ./docker-wsl.sh compose version
 ```bash
 cp .env ".env.backup-$(date +%Y%m%d-%H%M%S)"
 sed -i 's/^QWEN_CTX_SIZE=.*/QWEN_CTX_SIZE=196608/; s/^QWEN_MODEL_FILE=.*/QWEN_MODEL_FILE=Qwen3.8-27B-UD-Q4_K_M.gguf/' .env
-bash download-model.sh
+bash llm/scripts/download-model.sh
 bash ./docker-wsl.sh compose up -d --force-recreate llama
 ```
 
@@ -126,19 +144,19 @@ bash ./docker-wsl.sh compose up -d --force-recreate llama
 
 ```bash
 bash prepare.sh
-bash download-model.sh
+bash llm/scripts/download-model.sh
 ```
 
 prepare.sh скачивает образы и сохраняет их digests в .env. Интернет нужен для начальной установки. Это фиксация выбранных версий, а не гарантия их взаимной совместимости. Сохраните .env после приемки; не запускайте автоматические обновления контейнеров.
 
-download-model.sh скачивает указанный файл из Hugging Face в models/, фиксирует ревизию репозитория и записывает локальную SHA256 (по строке на файл в models/SHA256SUMS). По умолчанию скачивается Qwen3.8-27B-UD-Q4_K_M.gguf; другую модель можно передать явно:
+llm/scripts/download-model.sh скачивает указанный файл из Hugging Face в models/, фиксирует ревизию репозитория и записывает локальную SHA256 (по строке на файл в models/SHA256SUMS). По умолчанию скачивается Qwen3.8-27B-UD-Q4_K_M.gguf; другую модель можно передать явно:
 
 ```bash
-bash download-model.sh <repo> <file>
-bash download-model.sh "https://huggingface.co/<owner>/<repo>?show_file_info=<file>.gguf"
+bash llm/scripts/download-model.sh <repo> <file>
+bash llm/scripts/download-model.sh "https://huggingface.co/<owner>/<repo>?show_file_info=<file>.gguf"
 ```
 
-Например: `bash download-model.sh JonathanColetti/Qwen3.8-27B-Uncensored-GGUF Qwen3.8-27B-Uncensored-Q4_K_M.gguf`. Ревизия кэшируется отдельно для каждого репозитория в models/.revisions/, поэтому прерванное скачивание можно возобновить даже после обновления репозитория; повторный запуск готового файла пропускает загрузку. Это контроль повторного чтения, не независимая проверка издателя. При необходимости сравните SHA256 с данными выбранной ревизии на Hugging Face. Для gated-репозиториев задайте HF_TOKEN. После скачивания укажите новый файл в .env через QWEN_MODEL_FILE и пересоздайте контейнер llama.
+Например: `bash llm/scripts/download-model.sh JonathanColetti/Qwen3.8-27B-Uncensored-GGUF Qwen3.8-27B-Uncensored-Q4_K_M.gguf`. Ревизия кэшируется отдельно для каждого репозитория в models/.revisions/, поэтому прерванное скачивание можно возобновить даже после обновления репозитория; повторный запуск готового файла пропускает загрузку. Это контроль повторного чтения, не независимая проверка издателя. При необходимости сравните SHA256 с данными выбранной ревизии на Hugging Face. Для gated-репозиториев задайте HF_TOKEN. После скачивания укажите новый файл в .env через QWEN_MODEL_FILE и пересоздайте контейнер llama.
 
 4. Проверить порядок GPU
 
@@ -161,7 +179,7 @@ bash ./docker-wsl.sh compose logs -f llama
 
 ```bash
 curl --fail http://127.0.0.1:8080/health
-python3 smoke-test.py
+python3 llm/scripts/smoke-test.py
 nvidia-smi --query-gpu=index,name,memory.used,memory.free,utilization.gpu,power.draw,temperature.gpu --format=csv
 ```
 
@@ -169,7 +187,7 @@ nvidia-smi --query-gpu=index,name,memory.used,memory.free,utilization.gpu,power.
 
 `CPU_Mapped`, mmap/page cache и небольшие host/output buffers сами по себе не доказывают CPU-вычисления. Важно, какие тензоры реально размещены на CPU. Не используйте mlock для удержания дополнительной полной копии модели в RAM. В Windows следите также за Shared GPU memory: GPU offload в логах сам по себе не гарантирует отсутствие вытеснения драйвером.
 
-smoke-test.py проверяет обычный ответ, streaming usage, выдачу tool call и продолжение после результата инструмента. Это обязательнее для агента, чем тест «привет».
+llm/scripts/smoke-test.py проверяет обычный ответ, streaming usage, выдачу tool call и продолжение после результата инструмента. Это обязательнее для агента, чем тест «привет».
 
 6. Поднять мониторинг
 
@@ -205,7 +223,7 @@ nvidia_gpu_exporter install
 Start-Service nvidia_gpu_exporter
 ```
 
-В prometheus.yaml замените gpu-exporter:9835 на host.docker.internal:9835 и выполните `bash ./docker-wsl.sh compose restart prometheus`. Проверьте доступ из контейнерной сети. При необходимости разрешите входящий TCP 9835 в Windows Firewall только от сети Docker/WSL. Чтобы обычный `compose up -d` не запускал старый контейнер, добавьте ему `profiles: [wsl-gpu]` в Compose. Если и Windows не отдает отдельный показатель, оставьте его недоступным; мониторинг не создает отсутствующую метрику.
+В observability/prometheus.yaml замените gpu-exporter:9835 на host.docker.internal:9835 и выполните `bash ./docker-wsl.sh compose restart prometheus`. Проверьте доступ из контейнерной сети. При необходимости разрешите входящий TCP 9835 в Windows Firewall только от сети Docker/WSL. Чтобы обычный `compose up -d` не запускал старый контейнер, добавьте ему `profiles: [wsl-gpu]` в Compose. Если и Windows не отдает отдельный показатель, оставьте его недоступным; мониторинг не создает отсутствующую метрику.
 
 8. Приемка длинного контекста
 

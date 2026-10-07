@@ -4,7 +4,7 @@ description: Toggle in the chat: route this chat through the billion-context com
 version: 1.0.0
 """
 # Installed by `make agent-functions` (agent/functions/install.py). The bili.<model> copies come from the
-# http://bili:8787/bili/<upstream> connections with prefix_id "bili" in compose.yaml.
+# http://bili:8787/bili/<upstream> connections with prefix_id "bili" in agent/compose.yaml.
 
 from pydantic import BaseModel, Field
 

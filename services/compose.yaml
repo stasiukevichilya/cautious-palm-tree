@@ -1,0 +1,87 @@
+# Applications: Telegram bot, scraper, torrent client.
+# Part of the single ml-local project: included from ../compose.yaml, paths are relative to this file.
+x-common: &common
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: '3'
+services:
+  tgbot:
+    <<: *common
+    build:
+      context: ./tgbot
+    image: local/ml-tgbot:1
+    init: true
+    user: "${TGBOT_UID:-${SDXL_UID:-1000}}:${TGBOT_GID:-${SDXL_GID:-1000}}"
+    environment:
+      TGBOT_ADMIN_KEY: ${TGBOT_ADMIN_KEY:-}
+      TGBOT_TOKEN: ${TGBOT_TOKEN:-}
+      TGBOT_ADMINS: ${TGBOT_ADMINS:-}
+      # Point the bot at the torrent service; set TGBOT_TORRENT_URL= in .env to disable /magnet.
+      TGBOT_TORRENT_URL: ${TGBOT_TORRENT_URL:-http://torrent:8080}
+      # Outlives TORRENT_METADATA_TIMEOUT on the torrent side; see torrents.py.
+      TGBOT_TORRENT_METADATA_TIMEOUT: ${TGBOT_TORRENT_METADATA_TIMEOUT:-240}
+      # Point the bot at the market scraper; set TGBOT_SCRAPER_URL= in .env to disable /query, /watch, ...
+      TGBOT_SCRAPER_URL: ${TGBOT_SCRAPER_URL:-http://scraper:8080}
+    volumes:
+      - ../outputs/tgbot:/data
+      - ../imagegen/qwen-image/workflows:/workflows:ro
+    ports:
+      - "127.0.0.1:8084:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      start_period: 30s
+      retries: 4
+  scraper:
+    <<: *common
+    build:
+      context: ./scraper
+    image: local/ml-scraper:1
+    init: true
+    user: "${SCRAPER_UID:-${SDXL_UID:-1000}}:${SCRAPER_GID:-${SDXL_GID:-1000}}"
+    environment:
+      # One admin key for the whole stack: it guards both the scraper API and tgbot /api/notify.
+      SCRAPER_ADMIN_KEY: ${TGBOT_ADMIN_KEY:-}
+      SCRAPER_TGBOT_URL: http://tgbot:8080
+      SCRAPER_INTERVAL: ${SCRAPER_INTERVAL:-900}
+      SCRAPER_DELAY: ${SCRAPER_DELAY:-1.0}
+      SCRAPER_REPORT_HOUR: ${SCRAPER_REPORT_HOUR:-10}
+    volumes:
+      - ../outputs/scraper:/data
+    ports:
+      - "127.0.0.1:8086:8080"
+    depends_on: [tgbot]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      start_period: 30s
+      retries: 4
+  torrent:
+    <<: *common
+    build:
+      context: ./torrent
+    image: local/ml-torrent:1
+    init: true
+    user: "${TORRENT_UID:-${SDXL_UID:-1000}}:${TORRENT_GID:-${SDXL_GID:-1000}}"
+    environment:
+      # The single admin key guards the torrent API; the service uses it to push to tgbot too.
+      TORRENT_ADMIN_KEY: ${TGBOT_ADMIN_KEY:-}
+      TORRENT_TGBOT_URL: http://tgbot:8080
+      TORRENT_DESTINATION: /data/downloads
+      TORRENT_METADATA_TIMEOUT: ${TORRENT_METADATA_TIMEOUT:-180}
+    volumes:
+      - ../outputs/torrent:/data
+    ports:
+      - "127.0.0.1:8087:8080"
+    depends_on: [tgbot]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      start_period: 30s
+      retries: 4

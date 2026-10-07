@@ -3,6 +3,6 @@ models/
 outputs/
 __pycache__/
 *.pyc
-miniapps/
+services/miniapps/
 .env.backup-*
-strata/src/
+llm/strata/src/

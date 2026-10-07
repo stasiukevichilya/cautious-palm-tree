@@ -2,7 +2,7 @@
 
 Open Terminal only looks one level deep in ~/{.agents,.cptr,.claude,.codex}/skills, while plugin,
 synced and pi package skills live deeper. This links every found skill directory into
-~/.cptr/skills/<name> (the sources are read-only mounts under /mnt/skills, see compose.yaml).
+~/.cptr/skills/<name> (the sources are read-only mounts under /mnt/skills, see agent/compose.yaml).
 Runs at container start; earlier links are replaced, real directories there are left alone.
 Skills the agent writes itself (/skills:create) go to ~/.agents/skills, which Open Terminal reads first.
 """
