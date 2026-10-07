@@ -61,12 +61,14 @@ infra:
 qwen: infra
 	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen-mtp bonsai-mtp sdxl qwen-image qwen-image-uc strata
 	$(COMPOSE) --profile qwen up -d --no-deps qwen
+	@$(MAKE) --no-print-directory images-sync
 	@echo "Qwen запускается: http://127.0.0.1:8080"
 	@echo "Готовность: curl --fail http://127.0.0.1:8080/health"
 
 qwen-mtp: infra
 	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen bonsai-mtp sdxl qwen-image qwen-image-uc strata
 	$(COMPOSE) --profile qwen-mtp up -d --no-deps qwen-mtp
+	@$(MAKE) --no-print-directory images-sync
 	@echo "Qwen MTP запускается: http://127.0.0.1:8081"
 	@echo "Готовность: curl --fail http://127.0.0.1:8081/health"
 	@echo "MTP активен, если в логах есть 'creating MTP draft context' и статистика draft acceptance"
@@ -77,6 +79,7 @@ bonsai-mtp-build:
 bonsai-mtp: infra
 	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp sdxl qwen-image qwen-image-uc strata
 	$(COMPOSE) --profile bonsai-mtp up -d --no-deps bonsai-mtp
+	@$(MAKE) --no-print-directory images-sync
 	@echo "Bonsai MTP запускается: http://127.0.0.1:8089"
 	@echo "Готовность: curl --fail http://127.0.0.1:8089/health"
 
@@ -88,6 +91,7 @@ strata: infra
 	@[ -e models/strata/config/strata-iq2_xs.shared-settings.json ] || echo '{"reasoning_effort": "low"}' > models/strata/config/strata-iq2_xs.shared-settings.json
 	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp sdxl qwen-image qwen-image-uc
 	$(COMPOSE) --profile strata up -d --no-deps strata
+	@$(MAKE) --no-print-directory images-sync
 	@echo "Strata запускается: http://127.0.0.1:8090 (первый старт качает ~76 GB: make logs-strata)"
 	@echo "Готовность: curl --fail http://127.0.0.1:8090/health"
 
@@ -104,12 +108,14 @@ sdxl: infra
 	mkdir -p outputs/sdxl
 	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp qwen-image qwen-image-uc strata
 	$(COMPOSE) --profile sdxl up -d --no-deps sdxl
+	@$(MAKE) --no-print-directory images-sync
 	@echo "SDXL: http://127.0.0.1:8082"
 
 sdxl-dual: infra
 	mkdir -p outputs/sdxl
 	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp qwen-image qwen-image-uc strata
 	$(SDXL_COMPOSE) --profile sdxl up -d --no-deps sdxl
+	@$(MAKE) --no-print-directory images-sync
 	@echo "SDXL dual: http://127.0.0.1:8082"
 
 qwen-image-uc-build:
@@ -122,6 +128,7 @@ qwen-image-uc: infra
 	mkdir -p outputs/qwen-image-uc
 	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp sdxl qwen-image strata
 	$(COMPOSE) --profile qwen-image-uc up -d --no-deps qwen-image-uc
+	@$(MAKE) --no-print-directory images-sync
 	@echo "Qwen-Image UC: http://127.0.0.1:8085"
 
 # Both services on both GPUs, everything resident in VRAM; measured budget in QWEN-IMAGE-UC-RU.md.
@@ -132,6 +139,7 @@ uc-bonsai: infra
 	mkdir -p outputs/qwen-image-uc
 	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp sdxl qwen-image strata
 	$(UC_BONSAI_ENV) $(COMPOSE) --profile qwen-image-uc --profile bonsai-mtp up -d --no-deps qwen-image-uc bonsai-mtp
+	@$(MAKE) --no-print-directory images-sync
 	@echo "Qwen-Image UC: http://127.0.0.1:8085, Bonsai MTP: http://127.0.0.1:8089"
 
 qwen-image-uc-test:
@@ -214,8 +222,10 @@ torrent-test:
 logs-torrent:
 	$(COMPOSE) logs --tail=100 -f torrent
 
-# Open WebUI + Open Terminal + MCP images: not models, so model switching and models-stop leave them running.
-AGENT_SERVICES := agent-webui agent-terminal images images-uc blender-mcp bili headroom
+# Open WebUI + Open Terminal + MCP images: not models, so model switching and models-stop leave them running,
+# except images / images-uc, which only front the image generators and follow them (images-sync).
+IMAGES_SERVICES := images images-uc
+AGENT_SERVICES := agent-webui agent-terminal $(IMAGES_SERVICES) blender-mcp bili headroom
 BLENDER_VERSION ?= 4.0
 # Skill directories mounted into the terminal; missing ones are created so the bind mounts work.
 AGENT_SKILL_DIRS := $(HOME)/.claude/skills $(HOME)/.agents/skills $(HOME)/.config/opencode/skills \
@@ -238,7 +248,8 @@ agent: infra
 	@grep -q '^TGBOT_ADMIN_KEY=.\{16,\}' .env || { echo "Add TGBOT_ADMIN_KEY to .env: make tgbot-key"; exit 1; }
 	@for name in AGENT_SECRET_KEY AGENT_TERMINAL_KEY AGENT_ADMIN_EMAIL AGENT_ADMIN_PASSWORD; do grep -q "^$$name=." .env || { echo "Add $$name to .env: make agent-key"; exit 1; }; done
 	mkdir -p outputs/agent/webui outputs/agent/terminal outputs/agent/bili outputs/agent/headroom $(AGENT_SKILL_DIRS)
-	$(COMPOSE) --profile agent up -d --no-deps $(AGENT_SERVICES)
+	$(COMPOSE) --profile agent up -d --no-deps $(filter-out $(IMAGES_SERVICES),$(AGENT_SERVICES))
+	@$(MAKE) --no-print-directory images-sync
 	@echo "Open WebUI: http://$$(hostname -I | awk '{print $$1}'):1098 (вход: AGENT_ADMIN_EMAIL / AGENT_ADMIN_PASSWORD из .env)"
 
 # Open WebUI filters from agent/functions: Billion context and Headroom toggles, Context usage (run once, and after edits).
@@ -265,6 +276,16 @@ blender-addon:
 	    > "$$dir/blender_mcp.py" && echo "Addon: $$dir/blender_mcp.py"
 	@echo "Blender: Edit > Preferences > Add-ons > включить 'MCP for Blender'; 3D View > N > MCP for Blender > Start"
 
+# images runs while sdxl or qwen-image runs, images-uc while any of sdxl / qwen-image / qwen-image-uc does.
+images-sync:
+	@running=" $$($(COMPOSE) $(MODEL_PROFILES) ps --status running --services | tr '\n' ' ') "; up=; down=; \
+	case "$$running" in *" sdxl "*|*" qwen-image "*) up=images;; *) down=images;; esac; \
+	case "$$running" in *" sdxl "*|*" qwen-image "*|*" qwen-image-uc "*) up="$$up images-uc";; *) down="$$down images-uc";; esac; \
+	if [ -n "$$down" ]; then $(COMPOSE) --profile agent stop $$down; fi; \
+	if [ -z "$$up" ]; then :; \
+	elif grep -q '^TGBOT_ADMIN_KEY=.\{16,\}' .env 2>/dev/null; then $(COMPOSE) --profile agent up -d --no-deps $$up; \
+	else echo "Not starting$$up: add TGBOT_ADMIN_KEY to .env (make tgbot-key)"; fi
+
 images-build:
 	$(COMPOSE) --profile agent build images
 
@@ -284,6 +305,7 @@ qwen-image: infra
 	mkdir -p outputs/qwen-image
 	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp sdxl qwen-image-uc strata
 	QWEN_IMAGE_DIT=$(QWEN_IMAGE_DIT) $(COMPOSE) --profile qwen-image up -d --no-deps qwen-image
+	@$(MAKE) --no-print-directory images-sync
 	@echo "Qwen-Image ($(QWEN_IMAGE_DIT)): http://127.0.0.1:8083"
 
 # The DiT is fixed per process; changing it recreates the container.
@@ -305,6 +327,7 @@ qwen-image-browser-test:
 
 models-stop:
 	$(COMPOSE) $(MODEL_PROFILES) stop -t 75 qwen qwen-mtp bonsai-mtp sdxl qwen-image qwen-image-uc strata
+	@$(MAKE) --no-print-directory images-sync
 
 status:
 	$(COMPOSE) $(MODEL_PROFILES) --profile agent ps -a

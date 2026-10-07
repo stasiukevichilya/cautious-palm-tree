@@ -162,6 +162,11 @@ def trajectory():
 
 def metrics(server):
     text = httpx.get(f"{server}/metrics", timeout=10).text
+    if text.startswith("{"):  # Strata: JSON totals; prompt_tokens includes the reused (cached) part
+        t = json.loads(text)["totals"]
+        return {"prompt_tokens_total": t["prompt_tokens"] - t["reused"], "prompt_tokens_cached_total": t["reused"],
+                "prompt_seconds_total": t["prompt_ms"] / 1000, "tokens_predicted_total": t["output_tokens"],
+                "tokens_predicted_seconds_total": t["decode_ms"] / 1000, "n_decode_total": t["requests"]}
     return {m[0].split(":", 1)[1]: float(m[1]) for m in re.findall(r"^(llamacpp:\w+) ([\d.e+-]+)$", text, re.M)}
 
 
@@ -171,16 +176,16 @@ def delta(after, before):
     return {k: round(after.get(k, 0) - before.get(k, 0), 2) for k in keys}
 
 
-def route(name, model, run_id):
+def route(name, model, run_id, headroom="http://headroom:8787"):
     upstream = SERVERS[model]
     if name == "direct":
         return f"{upstream}/v1", {}
     if name == "bili":
         return f"http://bili:8787/bili/{upstream}/v1", {}
     if name == "hr":
-        return "http://headroom:8787/v1", {"x-headroom-base-url": upstream}
+        return f"{headroom}/v1", {"x-headroom-base-url": upstream}
     if name == "hb":
-        return "http://headroom:8787/v1", {"x-headroom-base-url": f"http://bili:8787/bili/{upstream}"}
+        return f"{headroom}/v1", {"x-headroom-base-url": f"http://bili:8787/bili/{upstream}"}
     raise ValueError(name)
 
 
@@ -208,6 +213,14 @@ def main():
     ap.add_argument("--routes", default="direct,hr,bili,hb")
     ap.add_argument("--out", default="/out")
     ap.add_argument("--steps", type=int, default=0, help="Limit steps (0 = all)")
+    ap.add_argument("--recall", choices=["fork", "chain"], default="fork",
+                    help="fork: each question on the bare session; chain: questions follow each other with the "
+                         "answers kept, as in a chat (Headroom's cache mode only compresses append-only history)")
+    ap.add_argument("--tag", default="", help="Suffix for the result file name")
+    ap.add_argument("--headroom-url", default="http://headroom:8787", help="Headroom proxy for the hr / hb routes")
+    ap.add_argument("--max-tokens", type=int, default=0,
+                    help="max_tokens for steps and questions (0 = 2048 / 1024). billion-context's compress call "
+                         "is generated within it, a truncated one fails")
     args = ap.parse_args()
     server = SERVERS[args.model]
     steps = trajectory()[: args.steps or None]
@@ -215,13 +228,13 @@ def main():
     client = httpx.Client(timeout=3600)
     for name in args.routes.split(","):
         run_id = f"bench-{name}-{args.model}-{int(time.time())}"
-        base, headers = route(name, args.model, run_id)
+        base, headers = route(name, args.model, run_id, args.headroom_url)
         # A nonce first: no route reuses the llama.cpp prefix cache of the previous one.
         messages = [{"role": "system", "content": f"[run {run_id}]\n{SYSTEM}"}, {"role": "user", "content": TASK}]
         log = {"route": name, "model": args.model, "run_id": run_id, "steps": [], "recall": []}
         start, before = time.time(), metrics(server)
         for i, (tool, targs, output) in enumerate(steps):
-            step = call(client, base, headers, args.model, messages, run_id, 2048)
+            step = call(client, base, headers, args.model, messages, run_id, args.max_tokens or 2048)
             step["i"] = i
             log["steps"].append(step)
             print(f"[{name}] step {i:2d} {step['status']} {step['s']:6.1f}s prompt={((step['usage'] or {}).get('prompt_tokens'))} "
@@ -235,7 +248,9 @@ def main():
         log["session"] = {"wall_s": round(time.time() - start, 1), **delta(mid, before)}
         for q, expected in QUESTIONS:
             ask = messages + [{"role": "user", "content": q + " Answer from the session so far, without calling tools."}]
-            res = call(client, base, headers, args.model, ask, run_id, 1024)
+            res = call(client, base, headers, args.model, ask, run_id, args.max_tokens or 1024)
+            if args.recall == "chain":
+                messages = ask + [{"role": "assistant", "content": res["content"]}]
             text = res["content"].lower()
             res.update(question=q, expected=expected, hits=[e for e in expected if e.lower() in text])
             res["ok"] = len(res["hits"]) == len(expected)
@@ -244,7 +259,8 @@ def main():
                   f"prompt={(res['usage'] or {}).get('prompt_tokens')}", flush=True)
         log["recall_cost"] = delta(metrics(server), mid)
         log["total_wall_s"] = round(time.time() - start, 1)
-        Path(args.out, f"{args.model}-{name}.json").write_text(json.dumps(log, ensure_ascii=False, indent=1))
+        log["recall_mode"], log["max_tokens"] = args.recall, args.max_tokens or "2048/1024"
+        Path(args.out, f"{args.model}-{name}{args.tag}.json").write_text(json.dumps(log, ensure_ascii=False, indent=1))
         print(f"[{name}] session {log['session']}", flush=True)
 
 

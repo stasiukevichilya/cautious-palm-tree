@@ -1,7 +1,7 @@
 """
 title: Context usage
 description: Live and per-answer context statistics for the context ring and the per-message lines.
-version: 2.3.0
+version: 2.4.0
 """
 # Installed by `make agent-functions` as a global filter. After each answer it stores
 # message.contextStats (window, this turn's prompt / cache / generated / KV total, speed), which
@@ -94,7 +94,7 @@ class Filter:
             "predicted_ms": usage.get("predicted_ms"),
         }
 
-    async def outlet(self, body: dict, __event_emitter__=None, __model__=None) -> dict:
+    async def outlet(self, body: dict, __event_emitter__=None, __model__=None, __request__=None) -> dict:
         last = next((m for m in reversed(body.get("messages") or []) if m.get("role") == "assistant"), None)
         usage = (last or {}).get("usage") or ((last or {}).get("info") or {}).get("usage") or {}
         if not last or not (usage.get("prompt_tokens") or usage.get("input_tokens")):
@@ -105,6 +105,10 @@ class Filter:
         filter_ids = body.get("filter_ids") or []
         bili = model.startswith(("bili.", "hb.")) or "billion_context" in filter_ids
         headroom = model.startswith(("hr.", "hb.")) or "headroom" in filter_ids
+        # The Headroom filter skips the proxy while it is down (or has no hr. copy) and notes the chat.
+        if headroom and __request__ is not None and body.get("chat_id") in getattr(
+                __request__.app.state, "headroom_skipped", ()):
+            headroom = False
         model = model.removeprefix("bili.").removeprefix("hr.").removeprefix("hb.")
         stats = {"model": model, "window": await self.window(model), "bili": bili, "headroom": headroom,
                  "at": int(time.time()),

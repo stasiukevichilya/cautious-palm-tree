@@ -243,10 +243,13 @@ services:
       # Built-in tool categories without a chat toggle are sent with every request (~10K tokens of schemas).
       # Off for all models; a model can turn one back on in Workspace > Models > Builtin Tools. The rest
       # (memory, web search, image generation, code interpreter, chat files, skills) follow the chat's toggles.
+      # defaultFilterIds: the Headroom toggle starts on in new chats (CTX-BENCH-RU.md); Billion context stays off.
+      # defaultFeatureIds []: Image (and web search, code interpreter) start off; without the key the chat keeps
+      # whatever state the toggles had before.
       DEFAULT_MODEL_METADATA: >-
         {"builtinTools": {"time": false, "user_input": false, "knowledge": false, "chats": false, "notes": false,
          "channels": false, "tasks": false, "automations": false, "calendar": false, "notifications": false,
-         "subagents": false}}
+         "subagents": false}, "defaultFilterIds": ["headroom"], "defaultFeatureIds": []}
       ENABLE_IMAGE_GENERATION: 'true'
       IMAGE_GENERATION_ENGINE: openai
       IMAGES_OPENAI_API_BASE_URL: http://images-uc:8080/v1
@@ -340,7 +343,8 @@ services:
   # Headroom: compresses tool outputs, logs, JSON and code in the prompt before it reaches the LLM
   # (http://headroom:8787/v1, upstream from the x-headroom-base-url header). Open WebUI routes a chat
   # through it while the "Headroom" toggle is on, independently of Billion context. Pinned version,
-  # telemetry and update checks off (image env). Not published: the unauthenticated bind is acknowledged.
+  # telemetry and update checks off (image env). Published on 127.0.0.1:8091 only, for pi / opencode on the
+  # host (they send x-headroom-base-url themselves); the unauthenticated bind is acknowledged.
   headroom:
     <<: *common
     profiles: ["agent"]
@@ -354,8 +358,15 @@ services:
       HEADROOM_ALLOW_UNAUTHENTICATED_BIND: '1'
       # Fallback upstream for requests without the header (and for /v1/models).
       OPENAI_TARGET_API_URL: http://qwen-mtp:8080
+      # Real windows (unknown models default to 128K). Names as Open WebUI and pi / opencode send them.
+      HEADROOM_MODEL_LIMITS: >-
+        {"openai": {"context_limits": {"qwen3.8-27b": 196608, "qwen3.8-27b-mtp": 163840,
+        "qwen3.8-27b-uc-mtp": 163840, "bonsai2-27b-uc-mtp": 262144, "bonsai-27b-uc-mtp": 262144,
+        "qwen3.8-flash-next-iq2_xs": 131072}}}
     volumes:
       - ./outputs/agent/headroom:/data
+    ports:
+      - 127.0.0.1:8091:8787
     networks: [default]
     dns_opt: ["timeout:1", "attempts:1"]
     healthcheck:

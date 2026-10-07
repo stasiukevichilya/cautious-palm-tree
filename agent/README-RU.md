@@ -19,10 +19,13 @@ Open WebUI (v0.11.4) для локальной сети на порту **1098**
 | `images` | MCP `generate_image` и OpenAI `/v1/images/generations` поверх sdxl / qwen-image | `127.0.0.1:8088` |
 | `images-uc` | генерация в Open WebUI: sdxl, qwen-image и qwen-image-uc, берётся первый запущенный; доступен только Open WebUI (сеть `agent-uc`), не боту | — |
 | `bili` | billion-context 0.1.185, прокси сжатия контекста перед LLM, без автообновления | — |
-| `headroom` | Headroom 0.40.0, прокси сжатия вывода инструментов / JSON / кода перед LLM, без телеметрии | — |
+| `headroom` | Headroom 0.40.0, прокси сжатия вывода инструментов / JSON / кода перед LLM, без телеметрии; Open WebUI, pi и opencode | `127.0.0.1:8091` |
 | `blender-mcp` | MCP-сервер mcp-for-blender 2.1.8 → аддон в Blender на Windows (`host.docker.internal:9876`) | — |
 
-GPU эти сервисы не занимают. Переключение моделей и `make models-stop` их не останавливают.
+GPU эти сервисы не занимают. Переключение моделей и `make models-stop` их не останавливают, кроме
+`images` и `images-uc`: они следуют за генераторами (`make images-sync` в конце каждой цели модели и `make agent`).
+`images` работает, пока запущен sdxl или qwen-image, `images-uc` — пока запущен любой из sdxl, qwen-image,
+qwen-image-uc. Без генератора оба остановлены, MCP-инструменты Images / Images UC в Open WebUI недоступны.
 
 ## Запуск
 
@@ -192,15 +195,29 @@ JSON (SmartCrusher), код (по AST) и текст (локальная ONNX-м
   на `hr.<модель>`. Это подключения `http://headroom:8787/v1` с `prefix_id: hr`. Модель выбирает
   заголовок `x-headroom-base-url` из конфига подключения, поэтому один контейнер обслуживает все модели.
   Список моделей у этих подключений статический (`model_ids`): `/v1/models` Headroom заголовок не учитывает.
-- **Оба тумблера сразу.** Цепочки headroom → bili нет. Запрос идёт только через billion-context,
-  а фильтр Headroom пишет об этом в статусе.
+- **По умолчанию включён** в новых чатах (`defaultFilterIds` в `DEFAULT_MODEL_METADATA`), Billion context —
+  выключен. Почему так — `CTX-BENCH-RU.md`. Выключить можно в меню Integrations у поля ввода.
+- **«Изображение» по умолчанию выключено:** `"defaultFeatureIds": []` в `DEFAULT_MODEL_METADATA`. Если у модели
+  в Workspace → Models свои «Default Features», действуют они (у qwen3.8-27b-mtp — веб-поиск и интерпретатор кода).
+- **Если Headroom не отвечает,** фильтр проверяет `/health` (кэш 15 с) и отправляет запрос мимо него со статусом
+  «Headroom недоступен, запрос идёт без Headroom»; плашка Headroom под таким ответом не ставится. Без этой
+  проверки чат падал бы с «Server Connection Error»: копии `hr.*` остаются в списке моделей и при
+  остановленном контейнере.
+- **Оба тумблера сразу:** `hb.<модель>`, цепочка headroom → billion-context → модель. Через billion-context
+  нет живых `timings`, под ответом только число токенов.
+- **pi и opencode** ходят в модели через Headroom: `http://127.0.0.1:8091/v1` и заголовок
+  `x-headroom-base-url: http://<qwen|qwen-mtp|bonsai-mtp>:8080` у каждого провайдера
+  (`~/.pi/agent/models.json`, `~/.config/opencode/opencode.jsonc`). Напрямую — порты 8080 / 8081 / 8089.
+- **Окна моделей** заданы в `HEADROOM_MODEL_LIMITS`: незнакомым моделям Headroom иначе ставит 128K. Имена — как
+  их шлют Open WebUI и pi / opencode.
 - **Подключения из compose** попадают в базу только при первом старте Open WebUI. На уже
   настроенной базе нужен `AGENT_RESET_CONFIG=true make agent` (сбрасывает настройки Admin Settings)
   или ручное добавление в Admin → Settings → Connections.
 - **Без телеметрии и автообновления.** Версия закреплена в `agent/headroom/Dockerfile`
   (`HEADROOM_VERSION`). Выключены `HEADROOM_BEACON`, `HEADROOM_UPDATE_CHECK`, `DO_NOT_TRACK=1` и
-  `--no-telemetry`. Разрешены только upstream'ы из `HEADROOM_ALLOWED_BASE_URLS`. Порт не публикуется, поэтому
-  слушать без токена разрешено явно (`HEADROOM_ALLOW_UNAUTHENTICATED_BIND`).
+  `--no-telemetry`. Разрешены только upstream'ы из `HEADROOM_ALLOWED_BASE_URLS`. Порт опубликован только на
+  `127.0.0.1:8091` (для pi / opencode), поэтому слушать без токена разрешено явно
+  (`HEADROOM_ALLOW_UNAUTHENTICATED_BIND`).
 - **Данные:** `outputs/agent/headroom`. Там же веса Kompress (~500 МБ, качаются с Hugging Face при первом запросе).
 
 **Использование контекста — как в веб-интерфейсе llama.cpp.**
